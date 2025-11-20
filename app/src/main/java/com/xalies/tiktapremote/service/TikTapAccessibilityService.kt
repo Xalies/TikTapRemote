@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import com.xalies.tiktapremote.*
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,9 @@ class TikTapAccessibilityService : AccessibilityService() {
     private var currentPackageName: CharSequence? = null
     private lateinit var repository: ProfileRepository
     private lateinit var audioManager: AudioManager
+
+    // Overlay Manager
+    private lateinit var overlayManager: OverlayManager
 
     private var profiles: Set<Profile> = setOf()
     private var targetPackageForOverlay: String? = null
@@ -63,8 +67,9 @@ class TikTapAccessibilityService : AccessibilityService() {
 
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val packageName = intent.getStringExtra("packageName")
-            val selectedTrigger = intent.getStringExtra("selectedTrigger")
+            val packageName = intent.getStringExtra("packageName") ?: ""
+            val appName = intent.getStringExtra("appName") ?: ""
+            val selectedTrigger = intent.getStringExtra("selectedTrigger") ?: "SINGLE_PRESS"
 
             val keyCode = intent.getIntExtra("keyCode", -1)
             val blockInput = intent.getBooleanExtra("blockInput", false)
@@ -73,31 +78,40 @@ class TikTapAccessibilityService : AccessibilityService() {
             val singleAction = intent.getStringExtra("singleAction")
             val doubleAction = intent.getStringExtra("doubleAction")
 
-            val overlayIntent = Intent(context, OverlayActivity::class.java).apply {
-                putExtra("targetPackageName", packageName)
-                putExtra("selectedTrigger", selectedTrigger)
-                putExtra("keyCode", keyCode)
-                putExtra("blockInput", blockInput)
-                putExtra("tapX", tapX)
-                putExtra("tapY", tapY)
-                if (singleAction != null) putExtra("singleAction", singleAction)
-                if (doubleAction != null) putExtra("doubleAction", doubleAction)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-
             when (intent.action) {
                 ACTION_START_TARGETING -> {
                     targetPackageForOverlay = packageName
-                    overlayIntent.putExtra("mode", "targeting")
-                    context.startActivity(overlayIntent)
+                    overlayManager.showOverlay(
+                        mode = "targeting",
+                        targetPackageName = packageName,
+                        targetAppName = appName,
+                        selectedTrigger = selectedTrigger,
+                        keyCode = keyCode,
+                        blockInput = blockInput,
+                        existingX = tapX,
+                        existingY = tapY,
+                        singleAction = singleAction,
+                        doubleAction = doubleAction
+                    )
                 }
                 ACTION_START_GESTURE_RECORDING -> {
                     targetPackageForOverlay = packageName
-                    overlayIntent.putExtra("mode", "recording")
-                    context.startActivity(overlayIntent)
+                    overlayManager.showOverlay(
+                        mode = "recording",
+                        targetPackageName = packageName,
+                        targetAppName = appName,
+                        selectedTrigger = selectedTrigger,
+                        keyCode = keyCode,
+                        blockInput = blockInput,
+                        existingX = tapX,
+                        existingY = tapY,
+                        singleAction = singleAction,
+                        doubleAction = doubleAction
+                    )
                 }
                 ACTION_STOP_TARGETING -> {
                     targetPackageForOverlay = null
+                    overlayManager.removeOverlay()
                 }
             }
         }
@@ -112,24 +126,27 @@ class TikTapAccessibilityService : AccessibilityService() {
             val newPackage = event.packageName
             if (newPackage.startsWith("com.android.systemui")) return
 
+            // Basic check - we'll do a deeper check on key press
             if (currentPackageName != newPackage) {
+                currentPackageName = newPackage
                 if (isRepeatActive) {
                     isRepeatActive = false
                     repeatHandler.removeCallbacks(repeatRunnable)
                     Toast.makeText(this, "Repeat OFF (App Changed)", Toast.LENGTH_SHORT).show()
                 }
+                updateNotificationState()
             }
+        }
+    }
 
-            currentPackageName = newPackage
+    private fun updateNotificationState() {
+        val hasAppProfile = profiles.any { it.packageName == currentPackageName.toString() }
+        val hasGlobalProfile = profiles.any { it.packageName == GLOBAL_PROFILE_PACKAGE_NAME }
 
-            val hasAppProfile = profiles.any { it.packageName == currentPackageName.toString() }
-            val hasGlobalProfile = profiles.any { it.packageName == GLOBAL_PROFILE_PACKAGE_NAME }
-
-            if (hasAppProfile || hasGlobalProfile) {
-                showControlNotification(this, repository.isServiceEnabled())
-            } else {
-                cancelControlNotification(this)
-            }
+        if (hasAppProfile || hasGlobalProfile) {
+            showControlNotification(this, repository.isServiceEnabled())
+        } else {
+            cancelControlNotification(this)
         }
     }
 
@@ -140,6 +157,8 @@ class TikTapAccessibilityService : AccessibilityService() {
         ProfileManager.initialize(this)
         repository = ProfileRepository(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        overlayManager = OverlayManager(this)
 
         ProfileManager.profiles
             .onEach { updatedProfiles -> profiles = updatedProfiles }
@@ -161,18 +180,26 @@ class TikTapAccessibilityService : AccessibilityService() {
         super.onDestroy()
         unregisterReceiver(broadcastReceiver)
         repeatHandler.removeCallbacks(repeatRunnable)
+        overlayManager.onDestroy()
     }
 
     override fun onKeyEvent(event: KeyEvent?): Boolean {
         if (!repository.isServiceEnabled()) return super.onKeyEvent(event)
+
+        // 1. Aggressively try to find the real active package
+        detectActivePackage()
+
         if (event?.action == KeyEvent.ACTION_DOWN) serviceScope.launch { _keyEvents.emit(event.keyCode) }
 
         if (event?.keyCode == KeyEvent.KEYCODE_BACK || event?.keyCode == KeyEvent.KEYCODE_HOME || event?.keyCode == KeyEvent.KEYCODE_APP_SWITCH) return super.onKeyEvent(event)
+
+        // If we are somehow in the TikTap app itself, let keys pass normally
         if (currentPackageName?.toString() == packageName) return true
 
         val keyCode = event!!.keyCode
         val action = event.action
         val profile = getCurrentProfile(keyCode) ?: run {
+            // No profile found for this app (and Global didn't match) -> Pass through
             if (action == KeyEvent.ACTION_DOWN) passThroughKeyEvent(keyCode)
             return true
         }
@@ -218,6 +245,53 @@ class TikTapAccessibilityService : AccessibilityService() {
             return true
         }
         return super.onKeyEvent(event)
+    }
+
+    /**
+     * Robustly detects the top package, even in fullscreen games/overlays.
+     * This fixes the issue where "rootInActiveWindow" returns null.
+     */
+    private fun detectActivePackage() {
+        var detectedPackage: CharSequence? = null
+
+        // Method 1: Standard rootInActiveWindow (Fastest)
+        try {
+            val root = rootInActiveWindow
+            if (root?.packageName != null) {
+                detectedPackage = root.packageName
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+
+        // Method 2: Window List Iteration (Most Robust)
+        // Requires flagRetrieveInteractiveWindows in xml config
+        if (detectedPackage == null || detectedPackage.toString().startsWith("com.android.systemui")) {
+            try {
+                val windowList = windows
+                // Iterate from front (0) to back
+                for (window in windowList) {
+                    // We want the top-most window that is active/focused and NOT system UI
+                    if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        if (window.root?.packageName != null) {
+                            val pkg = window.root.packageName
+                            if (!pkg.toString().startsWith("com.android.systemui")) {
+                                detectedPackage = pkg
+                                break
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+
+        // Update state if we found something new
+        if (detectedPackage != null && detectedPackage != currentPackageName) {
+            currentPackageName = detectedPackage
+            updateNotificationState()
+        }
     }
 
     private fun getCurrentProfile(keyCode: Int): Profile? {
