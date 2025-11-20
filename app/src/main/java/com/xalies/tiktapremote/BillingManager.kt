@@ -135,9 +135,11 @@ object BillingManager {
     }
 
     private fun grantEntitlement(products: List<String>) {
-        // Logic to determine highest tier if multiple are bought
-        // For this logic, we just apply the one purchased.
         CoroutineScope(Dispatchers.Main).launch {
+            // LEGIT PURCHASE CHECK:
+            // If the user bought the app, remove the "Backdoor User" flag so they aren't wiped later.
+            repository.setBackdoorUsed(false)
+
             when {
                 products.contains(SKU_PRO) -> {
                     repository.setCurrentTier(AppTier.PRO)

@@ -17,6 +17,9 @@ class ProfileRepository(context: Context) {
     private val settingsPrefs = context.getSharedPreferences("TikTapRemoteSettings", Context.MODE_PRIVATE)
     private val gson = Gson()
 
+    // Timestamp for December 31, 2025 23:59:59 GMT
+    private val BACKDOOR_EXPIRATION_DATE = 1767225599000L
+
     // --- PROFILE MANAGEMENT ---
     fun saveProfiles(profiles: Set<Profile>) {
         val json = gson.toJson(profiles)
@@ -45,6 +48,32 @@ class ProfileRepository(context: Context) {
 
     fun isServiceEnabled(): Boolean {
         return settingsPrefs.getBoolean("isServiceEnabled", true)
+    }
+
+    // --- BACKDOOR PROTECTION ---
+    fun setBackdoorUsed(used: Boolean) {
+        settingsPrefs.edit().putBoolean("backdoor_used", used).apply()
+    }
+
+    fun isBackdoorFlagged(): Boolean {
+        return settingsPrefs.getBoolean("backdoor_used", false)
+    }
+
+    fun checkAndEnforceBackdoorExpiration(): Boolean {
+        val now = System.currentTimeMillis()
+        // Check if we are past the date AND the user was flagged
+        if (now > BACKDOOR_EXPIRATION_DATE && isBackdoorFlagged()) {
+            // 1. Revert to FREE
+            setCurrentTier(AppTier.FREE)
+
+            // 2. Enforce limits (deletes non-global profiles, resets global actions)
+            return enforceFreeTierLimits()
+        }
+        return false
+    }
+
+    fun isBackdoorActive(): Boolean {
+        return System.currentTimeMillis() <= BACKDOOR_EXPIRATION_DATE
     }
 
     // --- TIER LOGIC & RESTRICTIONS ---
@@ -112,7 +141,8 @@ class ProfileRepository(context: Context) {
 
     // --- CLEANUP CREW ---
     fun enforceFreeTierLimits(): Boolean {
-        if (!hasUsedTrial()) return false
+        // Note: We skip "if (!hasUsedTrial())" because if this function is called
+        // by checkAndEnforceBackdoorExpiration, we WANT it to run regardless of trial status
         if (isTrialActive()) return false
         if (getCurrentTier() != AppTier.FREE) return false
 
@@ -189,7 +219,6 @@ class ProfileRepository(context: Context) {
         return getCurrentTier() != AppTier.FREE
     }
 
-    // REPEAT is the new "Killer Feature" (replaces Auto Scroll)
     fun canUseRepeatMode(): Boolean {
         val tier = getCurrentTier()
         return tier == AppTier.PRO_SAVER || tier == AppTier.PRO
@@ -202,7 +231,6 @@ class ProfileRepository(context: Context) {
             ActionType.DOUBLE_TAP, ActionType.SWIPE_DOWN -> tier != AppTier.FREE
             ActionType.SWIPE_LEFT, ActionType.SWIPE_RIGHT, ActionType.RECORDED ->
                 tier == AppTier.PRO_SAVER || tier == AppTier.PRO
-            // Auto Scroll enum is deprecated/removed in UI but kept for safety
             ActionType.TOGGLE_AUTO_SCROLL -> false
         }
     }

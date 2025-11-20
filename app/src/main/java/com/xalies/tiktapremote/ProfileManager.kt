@@ -39,7 +39,11 @@ object ProfileManager {
 
     fun checkAndEnforceLimits() {
         if (::repository.isInitialized) {
-            if (repository.enforceFreeTierLimits()) {
+            // FIRST: Check for backdoor expiration
+            val backdoorEnforced = repository.checkAndEnforceBackdoorExpiration()
+
+            // THEN: Standard limit checks (or if backdoor just forced a reset)
+            if (backdoorEnforced || repository.enforceFreeTierLimits()) {
                 // Reload if changes were made
                 _profiles.value = repository.loadProfiles()
             }

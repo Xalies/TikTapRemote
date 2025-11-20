@@ -214,8 +214,17 @@ fun MainScreen(
                         lastClickTime = currentTime
 
                         if (debugClickCount >= 10) {
-                            val newTier = repository.cycleTier()
-                            Toast.makeText(context, "🕵️ Debug: Switched to ${newTier.name}", Toast.LENGTH_LONG).show()
+                            // PROTECTION CHECK: Only allow if date hasn't passed
+                            if (repository.isBackdoorActive()) {
+                                // 1. Flag the user as having used the backdoor
+                                repository.setBackdoorUsed(true)
+
+                                // 2. Perform the cycle
+                                val newTier = repository.cycleTier()
+                                Toast.makeText(context, "🕵️ Debug: Switched to ${newTier.name}", Toast.LENGTH_LONG).show()
+                            }
+                            // If date passed, code does nothing (silently disabled)
+
                             debugClickCount = 0
                         }
                     }
