@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">TikTap Remote</string>
+    <string name="accessibility_service_description">TikTap Remote requires accessibility permissions to capture remote shutter inputs and translate them into screen taps. This service allows the app to function even when it\'s not in the foreground.</string>
+</resources>
