@@ -2,8 +2,13 @@ package com.xalies.tiktapremote
 
 import android.content.Context
 import android.view.KeyEvent
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import com.xalies.tiktapremote.data.AppDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 enum class AppTier {
     FREE,
@@ -13,34 +18,46 @@ enum class AppTier {
 }
 
 class ProfileRepository(context: Context) {
-    private val profilePrefs = context.getSharedPreferences("TikTapRemoteProfiles", Context.MODE_PRIVATE)
+    // Keep SharedPreferences for simple settings (Tier, Service State, Flags)
     private val settingsPrefs = context.getSharedPreferences("TikTapRemoteSettings", Context.MODE_PRIVATE)
-    private val gson = Gson()
+
+    // Use Room for Profile Data
+    private val database = AppDatabase.getDatabase(context)
+    private val profileDao = database.profileDao()
 
     // Timestamp for December 31, 2025 23:59:59 GMT
     private val BACKDOOR_EXPIRATION_DATE = 1767225599000L
 
-    // --- PROFILE MANAGEMENT ---
-    fun saveProfiles(profiles: Set<Profile>) {
-        val json = gson.toJson(profiles)
-        profilePrefs.edit().putString("profiles", json).apply()
+    // Scope for DB operations if not suspended (helper methods)
+    private val repoScope = CoroutineScope(Dispatchers.IO)
+
+    // --- PROFILE MANAGEMENT (Now via Room) ---
+
+    // Expose Flow directly from DAO
+    val allProfiles: Flow<List<Profile>> = profileDao.getAllProfiles()
+
+    fun saveProfile(profile: Profile) {
+        repoScope.launch {
+            profileDao.insertProfile(profile)
+        }
     }
 
-    fun loadProfiles(): MutableSet<Profile> {
-        val json = profilePrefs.getString("profiles", null)
-        return if (json != null) {
-            val type = object : TypeToken<MutableSet<Profile>>() {}.type
-            gson.fromJson(json, type)
-        } else {
-            mutableSetOf()
+    // Helper to get synchronous snapshot (used in legacy limit checks)
+    fun getProfilesSnapshot(): List<Profile> = runBlocking {
+        try {
+            allProfiles.first()
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
     fun deleteProfile(packageName: String) {
-        val profiles = loadProfiles()
-        profiles.removeAll { it.packageName == packageName }
-        saveProfiles(profiles)
+        repoScope.launch {
+            profileDao.deleteProfile(packageName)
+        }
     }
+
+    // --- SETTINGS (Kept in Prefs) ---
 
     fun setServiceEnabled(isEnabled: Boolean) {
         settingsPrefs.edit().putBoolean("isServiceEnabled", isEnabled).apply()
@@ -59,17 +76,16 @@ class ProfileRepository(context: Context) {
         return settingsPrefs.getBoolean("backdoor_used", false)
     }
 
-    fun checkAndEnforceBackdoorExpiration(): Boolean {
+    fun checkAndEnforceBackdoorExpiration() {
         val now = System.currentTimeMillis()
         // Check if we are past the date AND the user was flagged
         if (now > BACKDOOR_EXPIRATION_DATE && isBackdoorFlagged()) {
             // 1. Revert to FREE
             setCurrentTier(AppTier.FREE)
 
-            // 2. Enforce limits (deletes non-global profiles, resets global actions)
-            return enforceFreeTierLimits()
+            // 2. Enforce limits
+            enforceFreeTierLimits()
         }
-        return false
     }
 
     fun isBackdoorActive(): Boolean {
@@ -139,63 +155,50 @@ class ProfileRepository(context: Context) {
         return (startTime + tenMinutes) - now
     }
 
-    // --- CLEANUP CREW ---
-    fun enforceFreeTierLimits(): Boolean {
-        // Note: We skip "if (!hasUsedTrial())" because if this function is called
-        // by checkAndEnforceBackdoorExpiration, we WANT it to run regardless of trial status
-        if (isTrialActive()) return false
-        if (getCurrentTier() != AppTier.FREE) return false
+    // --- CLEANUP CREW (Updated for Room) ---
+    fun enforceFreeTierLimits() {
+        // This needs to run in a coroutine because DB ops are suspending
+        repoScope.launch {
+            if (isTrialActive()) return@launch
+            if (getCurrentTier() != AppTier.FREE) return@launch
 
-        var anyChangesMade = false
-        val currentProfiles = loadProfiles()
-        val iterator = currentProfiles.iterator()
+            // 1. Delete all non-global profiles directly via SQL
+            profileDao.deleteAllExcept(GLOBAL_PROFILE_PACKAGE_NAME)
 
-        while (iterator.hasNext()) {
-            val p = iterator.next()
-            if (p.packageName != GLOBAL_PROFILE_PACKAGE_NAME) {
-                iterator.remove()
-                anyChangesMade = true
-            }
-        }
+            // 2. Fetch Global Profile to sanitize it
+            val globalProfile = profileDao.getProfileByPackage(GLOBAL_PROFILE_PACKAGE_NAME)
 
-        val globalProfile = currentProfiles.find { it.packageName == GLOBAL_PROFILE_PACKAGE_NAME }
-        if (globalProfile != null) {
-            var modifiedGlobal = globalProfile
-            var globalDirty = false
+            if (globalProfile != null) {
+                var modifiedGlobal = globalProfile
+                var globalDirty = false
 
-            if (modifiedGlobal.keyCode != KeyEvent.KEYCODE_VOLUME_UP) {
-                modifiedGlobal = modifiedGlobal.copy(keyCode = KeyEvent.KEYCODE_VOLUME_UP)
-                globalDirty = true
-            }
+                if (modifiedGlobal.keyCode != KeyEvent.KEYCODE_VOLUME_UP) {
+                    modifiedGlobal = modifiedGlobal.copy(keyCode = KeyEvent.KEYCODE_VOLUME_UP)
+                    globalDirty = true
+                }
 
-            if (modifiedGlobal.actions.containsKey(TriggerType.DOUBLE_PRESS)) {
-                val newActions = modifiedGlobal.actions.toMutableMap()
-                newActions.remove(TriggerType.DOUBLE_PRESS)
-                modifiedGlobal = modifiedGlobal.copy(actions = newActions)
-                globalDirty = true
-            }
-
-            val singleAction = modifiedGlobal.actions[TriggerType.SINGLE_PRESS]
-            if (singleAction != null) {
-                if (singleAction.type != ActionType.TAP && singleAction.type != ActionType.SWIPE_UP) {
+                if (modifiedGlobal.actions.containsKey(TriggerType.DOUBLE_PRESS)) {
                     val newActions = modifiedGlobal.actions.toMutableMap()
-                    newActions[TriggerType.SINGLE_PRESS] = Action(ActionType.TAP)
+                    newActions.remove(TriggerType.DOUBLE_PRESS)
                     modifiedGlobal = modifiedGlobal.copy(actions = newActions)
                     globalDirty = true
                 }
-            }
 
-            if (globalDirty) {
-                currentProfiles.removeIf { it.packageName == GLOBAL_PROFILE_PACKAGE_NAME }
-                currentProfiles.add(modifiedGlobal)
-                anyChangesMade = true
+                val singleAction = modifiedGlobal.actions[TriggerType.SINGLE_PRESS]
+                if (singleAction != null) {
+                    if (singleAction.type != ActionType.TAP && singleAction.type != ActionType.SWIPE_UP) {
+                        val newActions = modifiedGlobal.actions.toMutableMap()
+                        newActions[TriggerType.SINGLE_PRESS] = Action(ActionType.TAP)
+                        modifiedGlobal = modifiedGlobal.copy(actions = newActions)
+                        globalDirty = true
+                    }
+                }
+
+                if (globalDirty) {
+                    profileDao.insertProfile(modifiedGlobal)
+                }
             }
         }
-
-        if (anyChangesMade) {
-            saveProfiles(currentProfiles)
-        }
-        return anyChangesMade
     }
 
     fun showAds(): Boolean {

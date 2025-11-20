@@ -1,7 +1,11 @@
 package com.xalies.tiktapremote
 
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+@Entity(tableName = "profiles")
 data class Profile(
-    val packageName: String,
+    @PrimaryKey val packageName: String,
     val keyCode: Int,
     val tapX: Int,
     val tapY: Int,

@@ -2,18 +2,17 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp) // Add KSP plugin
 }
 
 android {
     namespace = "com.xalies.tiktapremote"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.xalies.tiktapremote"
-        minSdk = 31
-        targetSdk = 36
+        minSdk = 31 // Lowered to support Android 12
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -22,10 +21,7 @@ android {
 
     buildTypes {
         release {
-            // CHANGE: Set these to true to obfuscate code and remove unused resources
-            isMinifyEnabled = true
-            isShrinkResources = true
-
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -58,6 +54,11 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.5.0")
     implementation("androidx.navigation:navigation-compose:2.7.5")
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // Room Database
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     // Monetization
     implementation("com.google.android.gms:play-services-ads:23.0.0")
