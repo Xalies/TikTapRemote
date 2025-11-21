@@ -25,10 +25,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -67,6 +69,7 @@ fun MainScreen(
 
     var profileToDelete by remember { mutableStateOf<Profile?>(null) }
     var isServiceGloballyEnabled by remember { mutableStateOf(repository.isServiceEnabled()) }
+    var isHapticEnabled by remember { mutableStateOf(repository.isHapticEnabled()) }
     var showAccessibilityDisclosure by remember { mutableStateOf(false) }
 
     var debugClickCount by remember { mutableIntStateOf(0) }
@@ -193,12 +196,17 @@ fun MainScreen(
         }
     ) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding).padding(16.dp)) {
+            // Master Toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Enable TikTap Service", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Enable TikTap Service",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f)
+                )
                 Switch(
                     checked = isServiceGloballyEnabled,
                     onCheckedChange = { isEnabled ->
@@ -214,22 +222,39 @@ fun MainScreen(
                         lastClickTime = currentTime
 
                         if (debugClickCount >= 10) {
-                            // PROTECTION CHECK: Only allow if date hasn't passed
                             if (repository.isBackdoorActive()) {
-                                // 1. Flag the user as having used the backdoor
                                 repository.setBackdoorUsed(true)
-
-                                // 2. Perform the cycle
                                 val newTier = repository.cycleTier()
                                 Toast.makeText(context, "🕵️ Debug: Switched to ${newTier.name}", Toast.LENGTH_LONG).show()
                             }
-                            // If date passed, code does nothing (silently disabled)
-
                             debugClickCount = 0
                         }
                     }
                 )
             }
+
+            // Haptic Toggle
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top=8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Vibration, null, tint = MaterialTheme.colorScheme.secondary)
+                Text(
+                    "Haptic Feedback",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = isHapticEnabled,
+                    onCheckedChange = { isEnabled ->
+                        isHapticEnabled = isEnabled
+                        repository.setHapticEnabled(isEnabled)
+                    },
+                    modifier = Modifier.scale(0.8f)
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             if (!hasOverlayPermission || !isAccessibilityServiceEnabled || !hasNotificationPermission) {
@@ -271,9 +296,34 @@ fun MainScreen(
                             profileNavInfo = profileInfo,
                             onClick = { onProfileClick(profileInfo) },
                             onLongClick = { profileToDelete = originalProfile },
+                            onDoubleClick = {
+                                if (profileInfo.packageName != GLOBAL_PROFILE_PACKAGE_NAME) {
+                                    val launchIntent = context.packageManager.getLaunchIntentForPackage(profileInfo.packageName)
+                                    if (launchIntent != null) {
+                                        context.startActivity(launchIntent)
+                                    } else {
+                                        Toast.makeText(context, "Cannot launch this app directly", Toast.LENGTH_SHORT).show()
+                                    }
+                                } else {
+                                    Toast.makeText(context, "Cannot launch Global Profile", Toast.LENGTH_SHORT).show()
+                                }
+                            },
                             onToggleEnabled = {
                                 if (originalProfile != null) {
-                                    val updatedProfile = originalProfile.copy(isEnabled = !originalProfile.isEnabled)
+                                    val newStatus = !originalProfile.isEnabled
+
+                                    // Check limits ONLY if turning ON and it is NOT the Global Profile
+                                    if (newStatus && originalProfile.packageName != GLOBAL_PROFILE_PACKAGE_NAME) {
+                                        val limit = repository.getMaxAppProfiles()
+                                        val currentEnabled = profiles.count { it.packageName != GLOBAL_PROFILE_PACKAGE_NAME && it.isEnabled }
+
+                                        if (currentEnabled >= limit) {
+                                            Toast.makeText(context, "Limit reached ($limit enabled profiles). Upgrade to enable more.", Toast.LENGTH_LONG).show()
+                                            return@ProfileListItem
+                                        }
+                                    }
+
+                                    val updatedProfile = originalProfile.copy(isEnabled = newStatus)
                                     ProfileManager.updateProfile(updatedProfile)
                                 }
                             }
@@ -345,6 +395,7 @@ fun ProfileListItem(
     profileNavInfo: ProfileNavInfo,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onDoubleClick: () -> Unit,
     onToggleEnabled: () -> Unit
 ) {
     val context = LocalContext.current
@@ -358,7 +409,11 @@ fun ProfileListItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+                onDoubleClick = onDoubleClick
+            )
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

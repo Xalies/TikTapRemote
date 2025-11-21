@@ -11,6 +11,8 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
@@ -32,6 +34,7 @@ class TikTapAccessibilityService : AccessibilityService() {
     private var currentPackageName: CharSequence? = null
     private lateinit var repository: ProfileRepository
     private lateinit var audioManager: AudioManager
+    private lateinit var vibrator: Vibrator
 
     // Overlay Manager
     private lateinit var overlayManager: OverlayManager
@@ -157,6 +160,7 @@ class TikTapAccessibilityService : AccessibilityService() {
         ProfileManager.initialize(this)
         repository = ProfileRepository(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
         overlayManager = OverlayManager(this)
 
@@ -311,14 +315,21 @@ class TikTapAccessibilityService : AccessibilityService() {
             lastKeyPressed = profile.keyCode
             repeatHandler.post(repeatRunnable)
             Toast.makeText(this, "Repeat ON", Toast.LENGTH_SHORT).show()
+            vibrate()
         } else {
             repeatHandler.removeCallbacks(repeatRunnable)
             Toast.makeText(this, "Repeat OFF", Toast.LENGTH_SHORT).show()
+            vibrate()
         }
     }
 
     private fun performActionForProfile(profile: Profile, action: Action) {
         if (!repository.isActionAllowed(action.type)) return
+
+        if (repository.isHapticEnabled()) {
+            vibrate()
+        }
+
         when (action.type) {
             ActionType.TAP -> performTap(profile.tapX, profile.tapY)
             ActionType.DOUBLE_TAP -> performDoubleTap(profile.tapX, profile.tapY)
@@ -330,6 +341,15 @@ class TikTapAccessibilityService : AccessibilityService() {
             else -> {}
         }
         if (!profile.blockInput) passThroughKeyEvent(profile.keyCode)
+    }
+
+    private fun vibrate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(50)
+        }
     }
 
     private fun performRecordedGesture(serializablePaths: List<SerializablePath>) {

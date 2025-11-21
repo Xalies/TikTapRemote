@@ -71,6 +71,14 @@ class ProfileRepository(context: Context) {
         return settingsPrefs.getBoolean("isServiceEnabled", true)
     }
 
+    fun setHapticEnabled(isEnabled: Boolean) {
+        settingsPrefs.edit().putBoolean("isHapticEnabled", isEnabled).apply()
+    }
+
+    fun isHapticEnabled(): Boolean {
+        return settingsPrefs.getBoolean("isHapticEnabled", true) // Default true for better UX
+    }
+
     // --- BACKDOOR PROTECTION ---
     fun setBackdoorUsed(used: Boolean) {
         settingsPrefs.edit().putBoolean("backdoor_used", used).apply()
@@ -214,48 +222,62 @@ class ProfileRepository(context: Context) {
         return maxOf(tenMinRemaining, adRewardRemaining)
     }
 
-    // --- CLEANUP CREW (Updated for Room) ---
+    // --- CLEANUP CREW (Updated to Disable instead of Delete) ---
     fun enforceFreeTierLimits() {
         // This needs to run in a coroutine because DB ops are suspending
         repoScope.launch {
-            // IMPORTANT: Do not delete stuff if either trial is active
+            // IMPORTANT: Do not restrict stuff if either trial is active
             if (isTrialActive() || isAdRewardActive()) return@launch
-            if (getCurrentTier() != AppTier.FREE) return@launch
 
-            // 1. Delete all non-global profiles directly via SQL
-            profileDao.deleteAllExcept(GLOBAL_PROFILE_PACKAGE_NAME)
+            // Note: We are now enforcing based on the *Current Tier*
+            if (getCurrentTier() == AppTier.FREE) {
+                // 1. Disable all non-global profiles instead of deleting
+                val allProfiles = profileDao.getAllProfilesList()
+                val profilesToUpdate = mutableListOf<Profile>()
 
-            // 2. Fetch Global Profile to sanitize it
-            val globalProfile = profileDao.getProfileByPackage(GLOBAL_PROFILE_PACKAGE_NAME)
-
-            if (globalProfile != null) {
-                var modifiedGlobal = globalProfile
-                var globalDirty = false
-
-                if (modifiedGlobal.keyCode != KeyEvent.KEYCODE_VOLUME_UP) {
-                    modifiedGlobal = modifiedGlobal.copy(keyCode = KeyEvent.KEYCODE_VOLUME_UP)
-                    globalDirty = true
-                }
-
-                if (modifiedGlobal.actions.containsKey(TriggerType.DOUBLE_PRESS)) {
-                    val newActions = modifiedGlobal.actions.toMutableMap()
-                    newActions.remove(TriggerType.DOUBLE_PRESS)
-                    modifiedGlobal = modifiedGlobal.copy(actions = newActions)
-                    globalDirty = true
-                }
-
-                val singleAction = modifiedGlobal.actions[TriggerType.SINGLE_PRESS]
-                if (singleAction != null) {
-                    if (singleAction.type != ActionType.TAP && singleAction.type != ActionType.SWIPE_UP) {
-                        val newActions = modifiedGlobal.actions.toMutableMap()
-                        newActions[TriggerType.SINGLE_PRESS] = Action(ActionType.TAP)
-                        modifiedGlobal = modifiedGlobal.copy(actions = newActions)
-                        globalDirty = true
+                allProfiles.forEach { profile ->
+                    if (profile.packageName != GLOBAL_PROFILE_PACKAGE_NAME && profile.isEnabled) {
+                        // Disable it
+                        profilesToUpdate.add(profile.copy(isEnabled = false))
                     }
                 }
 
-                if (globalDirty) {
-                    profileDao.insertProfile(modifiedGlobal)
+                if (profilesToUpdate.isNotEmpty()) {
+                    profileDao.insertProfiles(profilesToUpdate)
+                }
+
+                // 2. Fetch Global Profile to sanitize it
+                val globalProfile = profileDao.getProfileByPackage(GLOBAL_PROFILE_PACKAGE_NAME)
+
+                if (globalProfile != null) {
+                    var modifiedGlobal = globalProfile
+                    var globalDirty = false
+
+                    if (modifiedGlobal.keyCode != KeyEvent.KEYCODE_VOLUME_UP) {
+                        modifiedGlobal = modifiedGlobal.copy(keyCode = KeyEvent.KEYCODE_VOLUME_UP)
+                        globalDirty = true
+                    }
+
+                    if (modifiedGlobal.actions.containsKey(TriggerType.DOUBLE_PRESS)) {
+                        val newActions = modifiedGlobal.actions.toMutableMap()
+                        newActions.remove(TriggerType.DOUBLE_PRESS)
+                        modifiedGlobal = modifiedGlobal.copy(actions = newActions)
+                        globalDirty = true
+                    }
+
+                    val singleAction = modifiedGlobal.actions[TriggerType.SINGLE_PRESS]
+                    if (singleAction != null) {
+                        if (singleAction.type != ActionType.TAP && singleAction.type != ActionType.SWIPE_UP) {
+                            val newActions = modifiedGlobal.actions.toMutableMap()
+                            newActions[TriggerType.SINGLE_PRESS] = Action(ActionType.TAP)
+                            modifiedGlobal = modifiedGlobal.copy(actions = newActions)
+                            globalDirty = true
+                        }
+                    }
+
+                    if (globalDirty) {
+                        profileDao.insertProfile(modifiedGlobal)
+                    }
                 }
             }
         }
@@ -263,11 +285,6 @@ class ProfileRepository(context: Context) {
 
     fun showAds(): Boolean {
         val tier = getCurrentTier()
-        // If they are on Pro trial, we still might want to show banners,
-        // but usually "Pro" implies no ads.
-        // However, the "Pro Saver" tier specifically says "Contains Ads".
-        // The "Ad Reward" grants "Pro" features, but technically we are showing ads to get there.
-        // For now, if they have PRO tier (even via reward), let's hide banners to make the reward feel "Pro".
         return tier == AppTier.FREE || tier == AppTier.PRO_SAVER
     }
 

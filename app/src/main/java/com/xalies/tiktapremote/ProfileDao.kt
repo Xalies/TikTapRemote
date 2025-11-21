@@ -9,6 +9,10 @@ interface ProfileDao {
     @Query("SELECT * FROM profiles")
     fun getAllProfiles(): Flow<List<Profile>>
 
+    // Added for Repository logic
+    @Query("SELECT * FROM profiles")
+    suspend fun getAllProfilesList(): List<Profile>
+
     @Query("SELECT * FROM profiles WHERE packageName = :packageName LIMIT 1")
     suspend fun getProfileByPackage(packageName: String): Profile?
 

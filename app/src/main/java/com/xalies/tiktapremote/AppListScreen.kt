@@ -133,23 +133,39 @@ fun AppListScreen(
                     app = app,
                     onClick = {
                         val profileExists = profiles.any { it.packageName == app.packageName }
+
+                        // Case 1: Edit Existing Profile (Always Allow)
                         if (profileExists) {
-                            Toast.makeText(context, "A profile already exists for this app", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Profile already exists (editing not supported here, delete from main screen first)", Toast.LENGTH_SHORT).show()
+                            // NOTE: In this specific screen design, clicking an existing app usually means
+                            // "create new", but since we block duplicates, we just show a toast.
+                            // The user deletes from MainScreen to "edit" (re-add) in this flow usually,
+                            // or we could navigate to edit.
+                            // For now, blocking duplicate creation is the intended behavior.
                             return@AppListItem
                         }
 
+                        // Case 2: Global Profile (Always Allow)
                         if (app.packageName == GLOBAL_PROFILE_PACKAGE_NAME) {
                             onAppClick(app)
+                            return@AppListItem
+                        }
+
+                        // Case 3: Creating NEW App Profile - Check Limits
+                        val tier = repository.getCurrentTier()
+
+                        if (tier == AppTier.FREE) {
+                            // Free users can't create app profiles at all -> Show Trial Dialog
+                            selectedAppForTrial = app
+                            showTrialSelectionDialog = true
                         } else {
-                            val tier = repository.getCurrentTier()
-                            // Check if ANY trial is active OR if they have purchased a tier
-                            if (tier == AppTier.FREE) {
-                                // If neither purchased nor in an active trial, show the selection dialog
-                                // (Note: getCurrentTier() returns PRO if a trial is active, so this block only runs if NO trial is active)
-                                selectedAppForTrial = app
-                                showTrialSelectionDialog = true
+                            // Essentials/Pro users
+                            val currentAppCount = profiles.count { it.packageName != GLOBAL_PROFILE_PACKAGE_NAME }
+                            val limit = repository.getMaxAppProfiles()
+
+                            if (currentAppCount >= limit) {
+                                Toast.makeText(context, "Profile limit reached for current tier ($limit). Upgrade or delete a profile.", Toast.LENGTH_LONG).show()
                             } else {
-                                // Essentials/Pro users (or Active Trial users) allowed
                                 onAppClick(app)
                             }
                         }
