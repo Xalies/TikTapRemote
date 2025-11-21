@@ -1,19 +1,10 @@
 package com.xalies.tiktapremote
 
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.view.KeyEvent
-import android.view.WindowManager
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.runtime.*
-import androidx.core.content.ContextCompat
 import com.xalies.tiktapremote.ui.theme.TikTapRemoteTheme
 import java.net.URLEncoder
 
@@ -22,6 +13,14 @@ class OverlayActivity : ComponentActivity() {
     private var targetPackageName = ""
     private var targetAppName = ""
     private var selectedTrigger = ""
+
+    // Hold state to pass back
+    private var singleActionType: String? = null
+    private var doubleActionType: String? = null
+    private var singleX = 0
+    private var singleY = 0
+    private var doubleX = 0
+    private var doubleY = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,10 +41,15 @@ class OverlayActivity : ComponentActivity() {
 
         val keyCode = intent.getIntExtra("keyCode", -1)
         val blockInput = intent.getBooleanExtra("blockInput", false)
-        val existingX = intent.getIntExtra("tapX", 0)
-        val existingY = intent.getIntExtra("tapY", 0)
-        val singleAction = intent.getStringExtra("singleAction")
-        val doubleAction = intent.getStringExtra("doubleAction")
+
+        // Read all state to preserve it
+        if (intent.hasExtra("singleAction")) singleActionType = intent.getStringExtra("singleAction")
+        if (intent.hasExtra("doubleAction")) doubleActionType = intent.getStringExtra("doubleAction")
+
+        singleX = intent.getIntExtra("singleX", 0)
+        singleY = intent.getIntExtra("singleY", 0)
+        doubleX = intent.getIntExtra("doubleX", 0)
+        doubleY = intent.getIntExtra("doubleY", 0)
 
         setContent {
             TikTapRemoteTheme {
@@ -53,7 +57,15 @@ class OverlayActivity : ComponentActivity() {
                     OverlayView(
                         mode = "targeting",
                         onConfirmTarget = { x, y ->
-                            finishWithResult(x, y, null, keyCode, blockInput, singleAction, doubleAction)
+                            // Update the specific trigger's coordinates
+                            if (selectedTrigger == TriggerType.SINGLE_PRESS.name) {
+                                singleX = x
+                                singleY = y
+                            } else if (selectedTrigger == TriggerType.DOUBLE_PRESS.name) {
+                                doubleX = x
+                                doubleY = y
+                            }
+                            finishWithResult(keyCode, blockInput)
                         },
                         onCancel = {
                             cancelSetTargetNotification(this)
@@ -69,7 +81,7 @@ class OverlayActivity : ComponentActivity() {
                             sendBroadcast(Intent(ACTION_GESTURE_RECORDED).apply {
                                 putExtra("selectedTrigger", selectedTrigger)
                             })
-                            finishWithResult(existingX, existingY, null, keyCode, blockInput, singleAction, doubleAction)
+                            finishWithResult(keyCode, blockInput)
                         },
                         onCancel = {
                             finish()
@@ -81,22 +93,25 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun finishWithResult(
-        x: Int,
-        y: Int,
-        gesture: List<SerializablePath>?,
         keyCode: Int,
-        blockInput: Boolean,
-        singleAction: String?,
-        doubleAction: String?
+        blockInput: Boolean
     ) {
         cancelSetTargetNotification(this)
         sendBroadcast(Intent(ACTION_STOP_TARGETING))
 
         val encodedAppName = URLEncoder.encode(targetAppName, "UTF-8")
-        var uriString = "tiktapremote://profile/${targetPackageName}/${encodedAppName}?x=$x&y=$y&selectedTrigger=$selectedTrigger&blockInput=$blockInput"
+
+        // Build URI with ALL state
+        var uriString = "tiktapremote://profile/${targetPackageName}/${encodedAppName}?selectedTrigger=$selectedTrigger&blockInput=$blockInput"
+
         if (keyCode != -1) uriString += "&keyCode=$keyCode"
-        if (singleAction != null) uriString += "&singleAction=$singleAction"
-        if (doubleAction != null) uriString += "&doubleAction=$doubleAction"
+
+        // Always pass X/Y
+        uriString += "&singleX=$singleX&singleY=$singleY&doubleX=$doubleX&doubleY=$doubleY"
+
+        // Only pass types if they exist
+        if (singleActionType != null) uriString += "&singleAction=$singleActionType"
+        if (doubleActionType != null) uriString += "&doubleAction=$doubleActionType"
 
         val deepLinkIntent = Intent(Intent.ACTION_VIEW, Uri.parse(uriString)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)

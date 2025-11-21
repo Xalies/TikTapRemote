@@ -26,6 +26,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private enum class RecordingState {
@@ -143,6 +144,17 @@ fun RecordingLayout(
                 recordingTime--
             }
             if (recordingState == RecordingState.RECORDING) {
+                // *** FIX: Save any pending stroke before stopping ***
+                if (currentPoints.isNotEmpty()) {
+                    val now = System.currentTimeMillis()
+                    val duration = (now - strokeStartTime).coerceAtLeast(10L)
+                    val delay = (strokeStartTime - gestureSessionStartTime).coerceAtLeast(0L)
+
+                    strokes.add(SerializablePath(currentPoints.toList(), duration, delay))
+                    currentPoints.clear()
+                }
+                // ****************************************************
+
                 recordingState = RecordingState.CONFIRMING
                 timerRunning = false
             }
@@ -190,7 +202,18 @@ fun RecordingLayout(
                             true
                         }
                         MotionEvent.ACTION_MOVE -> {
-                            currentPoints.add(Point(motionEvent.x, motionEvent.y))
+                            val lastPoint = currentPoints.lastOrNull()
+                            if (lastPoint == null) {
+                                currentPoints.add(Point(motionEvent.x, motionEvent.y))
+                            } else {
+                                // *** THROTTLING LOGIC ***
+                                // Reverted to 20 pixels for smoother curves now that timeout bug is fixed
+                                val dx = abs(motionEvent.x - lastPoint.x)
+                                val dy = abs(motionEvent.y - lastPoint.y)
+                                if (dx >= 20 || dy >= 20) {
+                                    currentPoints.add(Point(motionEvent.x, motionEvent.y))
+                                }
+                            }
                             true
                         }
                         MotionEvent.ACTION_UP -> {
@@ -218,6 +241,9 @@ fun RecordingLayout(
                     path.moveTo(stroke.points.first().x, stroke.points.first().y)
                     stroke.points.forEach { point -> path.lineTo(point.x, point.y) }
                     drawPath(path, color = Color.Red, style = Stroke(width = 5f))
+                } else if (stroke.points.size == 1) {
+                    // Draw tap as a small circle/point
+                    drawCircle(color = Color.Red, radius = 5f, center = androidx.compose.ui.geometry.Offset(stroke.points.first().x, stroke.points.first().y))
                 }
             }
             // Draw current stroke
@@ -226,6 +252,8 @@ fun RecordingLayout(
                 path.moveTo(currentPoints.first().x, currentPoints.first().y)
                 currentPoints.forEach { point -> path.lineTo(point.x, point.y) }
                 drawPath(path, color = Color.Red, style = Stroke(width = 5f))
+            } else if (currentPoints.size == 1) {
+                drawCircle(color = Color.Red, radius = 5f, center = androidx.compose.ui.geometry.Offset(currentPoints.first().x, currentPoints.first().y))
             }
         }
 

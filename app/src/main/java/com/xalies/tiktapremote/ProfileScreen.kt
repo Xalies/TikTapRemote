@@ -49,11 +49,8 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun ProfileScreen(
     appInfo: AppInfo,
-    initialX: String?,
-    initialY: String?,
     initialKeyCode: String?,
     initialBlockInput: Boolean?,
-    initialShowVisualIndicator: Boolean?,
     initialActions: Map<TriggerType, Action>?,
     onBackClick: () -> Unit,
     initialSelectedTrigger: TriggerType = TriggerType.SINGLE_PRESS
@@ -79,11 +76,24 @@ fun ProfileScreen(
         mutableStateOf(if (canConfigKey) (initialKeyCode?.toIntOrNull() ?: defaultKey) else defaultKey)
     }
 
-    var tapTargetX by remember { mutableStateOf(initialX) }
-    var tapTargetY by remember { mutableStateOf(initialY) }
-
+    // Initialize assignedActions from params
     var assignedActions by remember { mutableStateOf(initialActions ?: emptyMap()) }
     var selectedTriggerForAssignment by remember { mutableStateOf(initialSelectedTrigger) }
+
+    // Update local state if params change (Deep Link return)
+    LaunchedEffect(initialActions) {
+        if (initialActions != null) {
+            assignedActions = initialActions
+        }
+    }
+
+    LaunchedEffect(initialSelectedTrigger) {
+        selectedTriggerForAssignment = initialSelectedTrigger
+    }
+
+    val activeAction = assignedActions[selectedTriggerForAssignment]
+    val tapTargetX = activeAction?.tapX
+    val tapTargetY = activeAction?.tapY
 
     LaunchedEffect(canDoublePress) {
         if (!canDoublePress && selectedTriggerForAssignment == TriggerType.DOUBLE_PRESS) {
@@ -92,7 +102,6 @@ fun ProfileScreen(
     }
 
     var timeRemaining by remember { mutableStateOf(repository.getTrialTimeRemaining()) }
-    // Check both trial types
     if (repository.isTrialActive() || repository.isAdRewardActive()) {
         LaunchedEffect(Unit) {
             while(timeRemaining > 0) {
@@ -106,23 +115,25 @@ fun ProfileScreen(
         }
     }
 
-    val needsTouchTarget = assignedActions.values.any { it.type != ActionType.RECORDED }
-    val isSavable = assignedActions.isNotEmpty() && (!needsTouchTarget || (tapTargetX != null && tapTargetY != null))
+    val isSavable = assignedActions.isNotEmpty()
 
     DisposableEffect(context) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.action == ACTION_GESTURE_RECORDED) {
                     val receivedTrigger = intent.getStringExtra("selectedTrigger")
-                    receivedTrigger?.let { triggerName ->
-                        selectedTriggerForAssignment = TriggerType.valueOf(triggerName)
-                    }
+                    val triggerToUpdate = if (receivedTrigger != null) TriggerType.valueOf(receivedTrigger) else selectedTriggerForAssignment
+
                     val recordedGesture = GestureRecordingManager.recordedGesture
                     if (recordedGesture != null) {
                         assignedActions = assignedActions.toMutableMap().apply {
-                            this[selectedTriggerForAssignment] = Action(ActionType.RECORDED, recordedGesture)
+                            val existingAction = this[triggerToUpdate]
+                            val x = existingAction?.tapX ?: 0
+                            val y = existingAction?.tapY ?: 0
+                            this[triggerToUpdate] = Action(ActionType.RECORDED, recordedGesture, tapX = x, tapY = y)
                         }
                         GestureRecordingManager.recordedGesture = null
+                        selectedTriggerForAssignment = triggerToUpdate
                     }
                 }
             }
@@ -136,23 +147,11 @@ fun ProfileScreen(
         onDispose { context.unregisterReceiver(receiver) }
     }
 
-    LaunchedEffect(Unit) {
-        val recordedGesture = GestureRecordingManager.recordedGesture
-        if (recordedGesture != null) {
-            assignedActions = assignedActions.toMutableMap().apply {
-                this[selectedTriggerForAssignment] = Action(ActionType.RECORDED, recordedGesture)
-            }
-            GestureRecordingManager.recordedGesture = null
-            Toast.makeText(context, "Gesture Saved!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
     fun launchAppForAction(isRecording: Boolean) {
         val action = if (isRecording) ACTION_START_GESTURE_RECORDING else ACTION_START_TARGETING
 
-        // Extract current actions
-        val singleAction = assignedActions[TriggerType.SINGLE_PRESS]?.type?.name
-        val doubleAction = assignedActions[TriggerType.DOUBLE_PRESS]?.type?.name
+        val singleAction = assignedActions[TriggerType.SINGLE_PRESS]
+        val doubleAction = assignedActions[TriggerType.DOUBLE_PRESS]
 
         val intent = Intent(action).apply {
             putExtra("packageName", appInfo.packageName)
@@ -160,12 +159,14 @@ fun ProfileScreen(
             putExtra("selectedTrigger", selectedTriggerForAssignment.name)
             putExtra("keyCode", keyCode)
             putExtra("blockInput", blockRemoteInput)
-            putExtra("tapX", tapTargetX?.toIntOrNull() ?: 0)
-            putExtra("tapY", tapTargetY?.toIntOrNull() ?: 0)
 
-            // PASS ACTIONS HERE
-            if (singleAction != null) putExtra("singleAction", singleAction)
-            if (doubleAction != null) putExtra("doubleAction", doubleAction)
+            putExtra("singleX", singleAction?.tapX ?: 0)
+            putExtra("singleY", singleAction?.tapY ?: 0)
+            putExtra("doubleX", doubleAction?.tapX ?: 0)
+            putExtra("doubleY", doubleAction?.tapY ?: 0)
+
+            if (singleAction != null) putExtra("singleAction", singleAction.type.name)
+            if (doubleAction != null) putExtra("doubleAction", doubleAction.type.name)
         }
         context.sendBroadcast(intent)
         val launchIntent = if (appInfo.packageName == GLOBAL_PROFILE_PACKAGE_NAME) {
@@ -175,11 +176,10 @@ fun ProfileScreen(
         }
         context.startActivity(launchIntent)
 
-        // PASS ACTIONS HERE TOO
         if (isRecording) {
-            showRecordingNotification(context, appInfo.packageName, appInfo.name, selectedTriggerForAssignment.name, singleAction, doubleAction)
+            showRecordingNotification(context, appInfo.packageName, appInfo.name, selectedTriggerForAssignment.name, singleAction?.type?.name, doubleAction?.type?.name)
         } else {
-            showSetTargetNotification(context, appInfo.packageName, appInfo.name, keyCode, selectedTriggerForAssignment.name, singleAction, doubleAction)
+            showSetTargetNotification(context, appInfo.packageName, appInfo.name, keyCode, selectedTriggerForAssignment.name, singleAction?.type?.name, doubleAction?.type?.name)
         }
     }
 
@@ -215,11 +215,14 @@ fun ProfileScreen(
                 actions = {
                     TextButton(onClick = {
                         if (isSavable) {
+                            val fallbackX = assignedActions[TriggerType.SINGLE_PRESS]?.tapX ?: 0
+                            val fallbackY = assignedActions[TriggerType.SINGLE_PRESS]?.tapY ?: 0
+
                             val profile = Profile(
                                 packageName = appInfo.packageName,
                                 keyCode = keyCode,
-                                tapX = tapTargetX?.toInt() ?: 0,
-                                tapY = tapTargetY?.toInt() ?: 0,
+                                tapX = fallbackX,
+                                tapY = fallbackY,
                                 blockInput = blockRemoteInput,
                                 showVisualIndicator = false,
                                 actions = assignedActions,
@@ -242,7 +245,6 @@ fun ProfileScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Display time remaining in hours/mins/secs
             if (repository.isTrialActive() || repository.isAdRewardActive()) {
                 val hours = TimeUnit.MILLISECONDS.toHours(timeRemaining)
                 val minutes = TimeUnit.MILLISECONDS.toMinutes(timeRemaining) % 60
@@ -266,7 +268,6 @@ fun ProfileScreen(
                 )
             }
 
-            // Trigger Tabs
             Row(modifier = Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh), verticalAlignment = Alignment.CenterVertically) {
                 TriggerType.values().forEach { trigger ->
                     val isSelected = selectedTriggerForAssignment == trigger
@@ -285,7 +286,6 @@ fun ProfileScreen(
                 }
             }
 
-            // --- SECTION: TAPS & GESTURES ---
             Text("Taps & Gestures", style = MaterialTheme.typography.titleMedium, modifier = Modifier.align(Alignment.Start).padding(top=8.dp))
 
             val tapActions = ActionType.values().filter { it.name.contains("TAP") || it == ActionType.RECORDED }
@@ -303,7 +303,21 @@ fun ProfileScreen(
                         isSelected = isAssigned,
                         isEnabled = isAllowed,
                         onClick = {
-                            if (isAllowed) assignedActions = assignedActions.toMutableMap().apply { this[selectedTriggerForAssignment] = Action(action) }
+                            if (isAllowed) {
+                                if (isAssigned) {
+                                    assignedActions = assignedActions.toMutableMap().apply { remove(selectedTriggerForAssignment) }
+                                } else {
+                                    val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
+                                    val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
+
+                                    val newAction = Action(
+                                        type = action,
+                                        tapX = if (action != ActionType.RECORDED) currentX else 0,
+                                        tapY = if (action != ActionType.RECORDED) currentY else 0
+                                    )
+                                    assignedActions = assignedActions.toMutableMap().apply { this[selectedTriggerForAssignment] = newAction }
+                                }
+                            }
                             else showTrialDialog = true
                         }
                     )
@@ -311,7 +325,6 @@ fun ProfileScreen(
                 }
             }
 
-            // --- SECTION: SWIPES ---
             val swipeActions = ActionType.values().filter { it.name.contains("SWIPE") }
 
             Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
@@ -325,7 +338,16 @@ fun ProfileScreen(
                         isSelected = isAssigned,
                         isEnabled = isAllowed,
                         onClick = {
-                            if (isAllowed) assignedActions = assignedActions.toMutableMap().apply { this[selectedTriggerForAssignment] = Action(action) }
+                            if (isAllowed) {
+                                if (isAssigned) {
+                                    assignedActions = assignedActions.toMutableMap().apply { remove(selectedTriggerForAssignment) }
+                                } else {
+                                    val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
+                                    val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
+                                    val newAction = Action(type = action, tapX = currentX, tapY = currentY)
+                                    assignedActions = assignedActions.toMutableMap().apply { this[selectedTriggerForAssignment] = newAction }
+                                }
+                            }
                             else showTrialDialog = true
                         }
                     )
@@ -335,22 +357,39 @@ fun ProfileScreen(
 
             Text("Swipes", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
 
-            // Selected Action Detail View
             Spacer(modifier = Modifier.height(8.dp))
-            val currentAction = assignedActions[selectedTriggerForAssignment]?.type
-            val title = if(currentAction == ActionType.RECORDED) "Record Gesture" else "Set Point"
-            val subtitle = if(currentAction == ActionType.RECORDED) "Press to start" else if (tapTargetX != null && tapTargetY != null) "X: $tapTargetX, Y: $tapTargetY" else "Not Set"
+            val currentAction = assignedActions[selectedTriggerForAssignment]
+            val type = currentAction?.type
+
+            val isActionSelected = type != null
+            val isRecordedType = type == ActionType.RECORDED
+
+            val title = if(isRecordedType) "Record Gesture" else "Set Point"
+            val subtitle = if (!isActionSelected) "Select an action above"
+            else if(isRecordedType) "Press to start"
+            else if (currentAction?.tapX != 0 && currentAction?.tapY != 0) "X: ${currentAction?.tapX}, Y: ${currentAction?.tapY}"
+            else "Not Set"
 
             Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-                SettingItem(title = title, subtitle = subtitle, icon = if (currentAction == ActionType.RECORDED) Icons.Rounded.FiberManualRecord else Icons.Rounded.Place, onClick = {
-                    val isRecording = currentAction == ActionType.RECORDED
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        when (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
-                            PackageManager.PERMISSION_GRANTED -> launchAppForAction(isRecording)
-                            else -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                SettingItem(
+                    title = title,
+                    subtitle = subtitle,
+                    icon = if (isRecordedType) Icons.Rounded.FiberManualRecord else Icons.Rounded.Place,
+                    isEnabled = isActionSelected,
+                    onClick = {
+                        if (isActionSelected) {
+                            val isRecording = isRecordedType
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                when (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
+                                    PackageManager.PERMISSION_GRANTED -> launchAppForAction(isRecording)
+                                    else -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            } else launchAppForAction(isRecording)
+                        } else {
+                            Toast.makeText(context, "Please select an action first", Toast.LENGTH_SHORT).show()
                         }
-                    } else launchAppForAction(isRecording)
-                })
+                    }
+                )
             }
 
             // Options & Repeat

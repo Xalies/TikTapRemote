@@ -330,13 +330,17 @@ class TikTapAccessibilityService : AccessibilityService() {
             vibrate()
         }
 
+        // Use Action-specific coordinates if available, fallback to legacy Profile coordinates
+        val x = if (action.tapX != 0) action.tapX else profile.tapX
+        val y = if (action.tapY != 0) action.tapY else profile.tapY
+
         when (action.type) {
-            ActionType.TAP -> performTap(profile.tapX, profile.tapY)
-            ActionType.DOUBLE_TAP -> performDoubleTap(profile.tapX, profile.tapY)
-            ActionType.SWIPE_UP -> performSwipe(profile.tapX, profile.tapY, 0f, -500f)
-            ActionType.SWIPE_DOWN -> performSwipe(profile.tapX, profile.tapY, 0f, 500f)
-            ActionType.SWIPE_LEFT -> performSwipe(profile.tapX, profile.tapY, -500f, 0f)
-            ActionType.SWIPE_RIGHT -> performSwipe(profile.tapX, profile.tapY, 500f, 0f)
+            ActionType.TAP -> performTap(x, y)
+            ActionType.DOUBLE_TAP -> performDoubleTap(x, y)
+            ActionType.SWIPE_UP -> performSwipe(x, y, 0f, -500f)
+            ActionType.SWIPE_DOWN -> performSwipe(x, y, 0f, 500f)
+            ActionType.SWIPE_LEFT -> performSwipe(x, y, -500f, 0f)
+            ActionType.SWIPE_RIGHT -> performSwipe(x, y, 500f, 0f)
             ActionType.RECORDED -> action.recordedGesture?.let { performRecordedGesture(it) }
             else -> {}
         }
@@ -356,26 +360,40 @@ class TikTapAccessibilityService : AccessibilityService() {
         if (serializablePaths.isEmpty()) return
         val gestureBuilder = GestureDescription.Builder()
         val pathsToPlay = serializablePaths.take(10)
+        var hasValidStroke = false
 
         for (serializablePath in pathsToPlay) {
-            if (serializablePath.points.size > 1) {
+            if (serializablePath.points.isNotEmpty()) {
                 val path = Path()
-                path.moveTo(serializablePath.points.first().x, serializablePath.points.first().y)
-                for (i in 1 until serializablePath.points.size) {
-                    val point = serializablePath.points[i]
-                    path.lineTo(point.x, point.y)
+                val startX = serializablePath.points.first().x
+                val startY = serializablePath.points.first().y
+                path.moveTo(startX, startY)
+
+                if (serializablePath.points.size == 1) {
+                    // Handle single point as a zero-length line (Tap)
+                    path.lineTo(startX, startY)
+                } else {
+                    for (i in 1 until serializablePath.points.size) {
+                        val point = serializablePath.points[i]
+                        path.lineTo(point.x, point.y)
+                    }
                 }
+
                 val strokeDuration = serializablePath.duration.coerceIn(50L, 10000L)
                 val strokeDelay = serializablePath.delay
 
                 try {
                     gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, strokeDelay, strokeDuration))
+                    hasValidStroke = true
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
             }
         }
-        try { dispatchGesture(gestureBuilder.build(), null, null) } catch (e: Exception) { e.printStackTrace() }
+
+        if (hasValidStroke) {
+            try { dispatchGesture(gestureBuilder.build(), null, null) } catch (e: Exception) { e.printStackTrace() }
+        }
     }
 
     private fun passThroughKeyEvent(keyCode: Int) {
