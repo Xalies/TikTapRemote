@@ -40,7 +40,7 @@ class ProfileRepository(context: Context) {
     // Expose Flow directly from DAO
     val allProfiles: Flow<List<Profile>> = profileDao.getAllProfiles()
 
-    // *** FIX: Expose getProfileByPackage for OverlayManager ***
+    // *** ADDED: Required for OverlayActivity to save data ***
     suspend fun getProfileByPackage(packageName: String): Profile? {
         return profileDao.getProfileByPackage(packageName)
     }

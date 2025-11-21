@@ -28,8 +28,15 @@ class OverlayManager(private val context: Context) {
             putExtra("blockInput", blockInput)
             putExtra("tapX", existingX)
             putExtra("tapY", existingY)
+
+            // Passing the full state to OverlayActivity so it can echo it back
             if (singleAction != null) putExtra("singleAction", singleAction)
             if (doubleAction != null) putExtra("doubleAction", doubleAction)
+
+            // Note: We rely on ProfileScreen to pass singleX/Y etc in the start intent.
+            // If using the original overlay manager signature, we might need to update it to accept all these args if not already.
+            // But based on your request, we are reverting to the state *before* the "request data" change.
+            // That state relied on ProfileScreen passing everything via extras to the broadcast which OverlayManager picks up.
         }
         context.startActivity(intent)
     }

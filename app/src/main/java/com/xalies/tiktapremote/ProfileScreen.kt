@@ -51,12 +51,17 @@ fun ProfileScreen(
     appInfo: AppInfo,
     initialKeyCode: String?,
     initialBlockInput: Boolean?,
-    initialActions: Map<TriggerType, Action>?,
+    initialActions: Map<TriggerType, Action>?, // Used for initial state if DB empty
     onBackClick: () -> Unit,
     initialSelectedTrigger: TriggerType = TriggerType.SINGLE_PRESS
 ) {
     val context = LocalContext.current
     val repository = remember { ProfileRepository(context) }
+
+    // *** DB OBSERVATION ***
+    // This connects the UI directly to the database. When OverlayActivity saves, this updates.
+    val profiles by ProfileManager.profiles.collectAsState()
+    val liveProfile = profiles.find { it.packageName == appInfo.packageName }
 
     var currentTier by remember { mutableStateOf(repository.getCurrentTier()) }
     fun refreshTier() { currentTier = repository.getCurrentTier() }
@@ -76,21 +81,26 @@ fun ProfileScreen(
         mutableStateOf(if (canConfigKey) (initialKeyCode?.toIntOrNull() ?: defaultKey) else defaultKey)
     }
 
-    // Initialize assignedActions from params
-    var assignedActions by remember { mutableStateOf(initialActions ?: emptyMap()) }
+    // Initialize from DB or args
+    var assignedActions by remember { mutableStateOf(liveProfile?.actions ?: initialActions ?: emptyMap()) }
     var selectedTriggerForAssignment by remember { mutableStateOf(initialSelectedTrigger) }
 
-    // Update local state if params change (Deep Link return)
-    LaunchedEffect(initialActions) {
-        if (initialActions != null) {
-            assignedActions = initialActions
+    // Sync with DB updates
+    LaunchedEffect(liveProfile) {
+        if (liveProfile != null) {
+            assignedActions = liveProfile.actions
+            keyCode = liveProfile.keyCode
+            blockRemoteInput = liveProfile.blockInput
+            repeatInterval = liveProfile.repeatInterval.toFloat()
         }
     }
 
+    // Sync Tab selection from deep link return
     LaunchedEffect(initialSelectedTrigger) {
         selectedTriggerForAssignment = initialSelectedTrigger
     }
 
+    // Derive display values
     val activeAction = assignedActions[selectedTriggerForAssignment]
     val tapTargetX = activeAction?.tapX
     val tapTargetY = activeAction?.tapY
@@ -117,41 +127,30 @@ fun ProfileScreen(
 
     val isSavable = assignedActions.isNotEmpty()
 
-    DisposableEffect(context) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action == ACTION_GESTURE_RECORDED) {
-                    val receivedTrigger = intent.getStringExtra("selectedTrigger")
-                    val triggerToUpdate = if (receivedTrigger != null) TriggerType.valueOf(receivedTrigger) else selectedTriggerForAssignment
+    // Helper to save BEFORE launching overlay
+    fun saveProfileLocally() {
+        val fallbackX = assignedActions[TriggerType.SINGLE_PRESS]?.tapX ?: 0
+        val fallbackY = assignedActions[TriggerType.SINGLE_PRESS]?.tapY ?: 0
 
-                    val recordedGesture = GestureRecordingManager.recordedGesture
-                    if (recordedGesture != null) {
-                        assignedActions = assignedActions.toMutableMap().apply {
-                            val existingAction = this[triggerToUpdate]
-                            val x = existingAction?.tapX ?: 0
-                            val y = existingAction?.tapY ?: 0
-                            this[triggerToUpdate] = Action(ActionType.RECORDED, recordedGesture, tapX = x, tapY = y)
-                        }
-                        GestureRecordingManager.recordedGesture = null
-                        selectedTriggerForAssignment = triggerToUpdate
-                    }
-                }
-            }
-        }
-        val intentFilter = IntentFilter(ACTION_GESTURE_RECORDED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, intentFilter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, intentFilter)
-        }
-        onDispose { context.unregisterReceiver(receiver) }
+        val profile = Profile(
+            packageName = appInfo.packageName,
+            keyCode = keyCode,
+            tapX = fallbackX,
+            tapY = fallbackY,
+            blockInput = blockRemoteInput,
+            showVisualIndicator = false,
+            actions = assignedActions,
+            repeatInterval = repeatInterval.toLong()
+        )
+        ProfileManager.updateProfile(profile)
     }
 
     fun launchAppForAction(isRecording: Boolean) {
-        val action = if (isRecording) ACTION_START_GESTURE_RECORDING else ACTION_START_TARGETING
+        // *** SAVE FIRST ***
+        // This ensures OverlayActivity reads the current state (including the other trigger) from DB
+        saveProfileLocally()
 
-        val singleAction = assignedActions[TriggerType.SINGLE_PRESS]
-        val doubleAction = assignedActions[TriggerType.DOUBLE_PRESS]
+        val action = if (isRecording) ACTION_START_GESTURE_RECORDING else ACTION_START_TARGETING
 
         val intent = Intent(action).apply {
             putExtra("packageName", appInfo.packageName)
@@ -160,13 +159,11 @@ fun ProfileScreen(
             putExtra("keyCode", keyCode)
             putExtra("blockInput", blockRemoteInput)
 
-            putExtra("singleX", singleAction?.tapX ?: 0)
-            putExtra("singleY", singleAction?.tapY ?: 0)
-            putExtra("doubleX", doubleAction?.tapX ?: 0)
-            putExtra("doubleY", doubleAction?.tapY ?: 0)
-
-            if (singleAction != null) putExtra("singleAction", singleAction.type.name)
-            if (doubleAction != null) putExtra("doubleAction", doubleAction.type.name)
+            // Pass current coordinates just for the overlay UI to start there
+            val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
+            val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
+            putExtra("tapX", currentX)
+            putExtra("tapY", currentY)
         }
         context.sendBroadcast(intent)
         val launchIntent = if (appInfo.packageName == GLOBAL_PROFILE_PACKAGE_NAME) {
@@ -177,9 +174,9 @@ fun ProfileScreen(
         context.startActivity(launchIntent)
 
         if (isRecording) {
-            showRecordingNotification(context, appInfo.packageName, appInfo.name, selectedTriggerForAssignment.name, singleAction?.type?.name, doubleAction?.type?.name)
+            showRecordingNotification(context, appInfo.packageName, appInfo.name, selectedTriggerForAssignment.name, null, null)
         } else {
-            showSetTargetNotification(context, appInfo.packageName, appInfo.name, keyCode, selectedTriggerForAssignment.name, singleAction?.type?.name, doubleAction?.type?.name)
+            showSetTargetNotification(context, appInfo.packageName, appInfo.name, keyCode, selectedTriggerForAssignment.name, null, null)
         }
     }
 
@@ -215,20 +212,7 @@ fun ProfileScreen(
                 actions = {
                     TextButton(onClick = {
                         if (isSavable) {
-                            val fallbackX = assignedActions[TriggerType.SINGLE_PRESS]?.tapX ?: 0
-                            val fallbackY = assignedActions[TriggerType.SINGLE_PRESS]?.tapY ?: 0
-
-                            val profile = Profile(
-                                packageName = appInfo.packageName,
-                                keyCode = keyCode,
-                                tapX = fallbackX,
-                                tapY = fallbackY,
-                                blockInput = blockRemoteInput,
-                                showVisualIndicator = false,
-                                actions = assignedActions,
-                                repeatInterval = repeatInterval.toLong()
-                            )
-                            ProfileManager.updateProfile(profile)
+                            saveProfileLocally()
                             onBackClick()
                         }
                     }, enabled = isSavable) { Text("Save", fontWeight = FontWeight.Bold) }
@@ -268,6 +252,7 @@ fun ProfileScreen(
                 )
             }
 
+            // Trigger Tabs
             Row(modifier = Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh), verticalAlignment = Alignment.CenterVertically) {
                 TriggerType.values().forEach { trigger ->
                     val isSelected = selectedTriggerForAssignment == trigger
@@ -286,6 +271,7 @@ fun ProfileScreen(
                 }
             }
 
+            // --- SECTION: TAPS & GESTURES ---
             Text("Taps & Gestures", style = MaterialTheme.typography.titleMedium, modifier = Modifier.align(Alignment.Start).padding(top=8.dp))
 
             val tapActions = ActionType.values().filter { it.name.contains("TAP") || it == ActionType.RECORDED }
@@ -305,8 +291,10 @@ fun ProfileScreen(
                         onClick = {
                             if (isAllowed) {
                                 if (isAssigned) {
+                                    // TOGGLE OFF
                                     assignedActions = assignedActions.toMutableMap().apply { remove(selectedTriggerForAssignment) }
                                 } else {
+                                    // TOGGLE ON
                                     val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
                                     val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
 
@@ -325,6 +313,7 @@ fun ProfileScreen(
                 }
             }
 
+            // --- SECTION: SWIPES ---
             val swipeActions = ActionType.values().filter { it.name.contains("SWIPE") }
 
             Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
@@ -340,8 +329,10 @@ fun ProfileScreen(
                         onClick = {
                             if (isAllowed) {
                                 if (isAssigned) {
+                                    // TOGGLE OFF
                                     assignedActions = assignedActions.toMutableMap().apply { remove(selectedTriggerForAssignment) }
                                 } else {
+                                    // TOGGLE ON
                                     val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
                                     val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
                                     val newAction = Action(type = action, tapX = currentX, tapY = currentY)
@@ -357,6 +348,7 @@ fun ProfileScreen(
 
             Text("Swipes", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
 
+            // Selected Action Detail View
             Spacer(modifier = Modifier.height(8.dp))
             val currentAction = assignedActions[selectedTriggerForAssignment]
             val type = currentAction?.type
@@ -375,7 +367,7 @@ fun ProfileScreen(
                     title = title,
                     subtitle = subtitle,
                     icon = if (isRecordedType) Icons.Rounded.FiberManualRecord else Icons.Rounded.Place,
-                    isEnabled = isActionSelected,
+                    isEnabled = isActionSelected, // *** DISABLE if no action ***
                     onClick = {
                         if (isActionSelected) {
                             val isRecording = isRecordedType

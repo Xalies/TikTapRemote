@@ -5,7 +5,11 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.lifecycle.lifecycleScope
 import com.xalies.tiktapremote.ui.theme.TikTapRemoteTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 
 class OverlayActivity : ComponentActivity() {
@@ -13,14 +17,6 @@ class OverlayActivity : ComponentActivity() {
     private var targetPackageName = ""
     private var targetAppName = ""
     private var selectedTrigger = ""
-
-    // Hold state to pass back
-    private var singleActionType: String? = null
-    private var doubleActionType: String? = null
-    private var singleX = 0
-    private var singleY = 0
-    private var doubleX = 0
-    private var doubleY = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,30 +38,13 @@ class OverlayActivity : ComponentActivity() {
         val keyCode = intent.getIntExtra("keyCode", -1)
         val blockInput = intent.getBooleanExtra("blockInput", false)
 
-        // Read all state to preserve it
-        if (intent.hasExtra("singleAction")) singleActionType = intent.getStringExtra("singleAction")
-        if (intent.hasExtra("doubleAction")) doubleActionType = intent.getStringExtra("doubleAction")
-
-        singleX = intent.getIntExtra("singleX", 0)
-        singleY = intent.getIntExtra("singleY", 0)
-        doubleX = intent.getIntExtra("doubleX", 0)
-        doubleY = intent.getIntExtra("doubleY", 0)
-
         setContent {
             TikTapRemoteTheme {
                 if (mode == "targeting") {
                     OverlayView(
                         mode = "targeting",
                         onConfirmTarget = { x, y ->
-                            // Update the specific trigger's coordinates
-                            if (selectedTrigger == TriggerType.SINGLE_PRESS.name) {
-                                singleX = x
-                                singleY = y
-                            } else if (selectedTrigger == TriggerType.DOUBLE_PRESS.name) {
-                                doubleX = x
-                                doubleY = y
-                            }
-                            finishWithResult(keyCode, blockInput)
+                            saveAndFinish(x, y, null, keyCode, blockInput)
                         },
                         onCancel = {
                             cancelSetTargetNotification(this)
@@ -77,11 +56,7 @@ class OverlayActivity : ComponentActivity() {
                     OverlayView(
                         mode = "recording",
                         onGestureRecorded = { gesture ->
-                            GestureRecordingManager.recordedGesture = gesture
-                            sendBroadcast(Intent(ACTION_GESTURE_RECORDED).apply {
-                                putExtra("selectedTrigger", selectedTrigger)
-                            })
-                            finishWithResult(keyCode, blockInput)
+                            saveAndFinish(0, 0, gesture, keyCode, blockInput)
                         },
                         onCancel = {
                             finish()
@@ -92,31 +67,50 @@ class OverlayActivity : ComponentActivity() {
         }
     }
 
-    private fun finishWithResult(
+    private fun saveAndFinish(
+        x: Int,
+        y: Int,
+        gesture: List<SerializablePath>?,
         keyCode: Int,
         blockInput: Boolean
     ) {
         cancelSetTargetNotification(this)
         sendBroadcast(Intent(ACTION_STOP_TARGETING))
 
-        val encodedAppName = URLEncoder.encode(targetAppName, "UTF-8")
+        // *** SAVE TO DB BEFORE NAVIGATING ***
+        lifecycleScope.launch(Dispatchers.IO) {
+            val repo = ProfileRepository(applicationContext)
+            val profile = repo.getProfileByPackage(targetPackageName)
 
-        // Build URI with ALL state
-        var uriString = "tiktapremote://profile/${targetPackageName}/${encodedAppName}?selectedTrigger=$selectedTrigger&blockInput=$blockInput"
+            if (profile != null) {
+                val triggerType = try { TriggerType.valueOf(selectedTrigger) } catch (e: Exception) { TriggerType.SINGLE_PRESS }
+                val newActions = profile.actions.toMutableMap()
 
-        if (keyCode != -1) uriString += "&keyCode=$keyCode"
+                val currentAction = newActions[triggerType] ?: Action(ActionType.TAP)
+                val updatedAction = if (gesture != null) {
+                    currentAction.copy(type = ActionType.RECORDED, recordedGesture = gesture)
+                } else {
+                    // For targeting, ensure we have a coordinate-based type (default TAP)
+                    val type = if (currentAction.type == ActionType.RECORDED) ActionType.TAP else currentAction.type
+                    currentAction.copy(type = type, tapX = x, tapY = y)
+                }
 
-        // Always pass X/Y
-        uriString += "&singleX=$singleX&singleY=$singleY&doubleX=$doubleX&doubleY=$doubleY"
+                newActions[triggerType] = updatedAction
+                repo.saveProfile(profile.copy(actions = newActions))
+            }
 
-        // Only pass types if they exist
-        if (singleActionType != null) uriString += "&singleAction=$singleActionType"
-        if (doubleActionType != null) uriString += "&doubleAction=$doubleActionType"
+            // *** NAVIGATE BACK ***
+            withContext(Dispatchers.Main) {
+                val encodedAppName = URLEncoder.encode(targetAppName, "UTF-8")
+                // We pass selectedTrigger so the profile screen knows which tab to open
+                val uriString = "tiktapremote://profile/${targetPackageName}/${encodedAppName}?selectedTrigger=$selectedTrigger"
 
-        val deepLinkIntent = Intent(Intent.ACTION_VIEW, Uri.parse(uriString)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                val deepLinkIntent = Intent(Intent.ACTION_VIEW, Uri.parse(uriString)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                startActivity(deepLinkIntent)
+                finish()
+            }
         }
-        startActivity(deepLinkIntent)
-        finish()
     }
 }

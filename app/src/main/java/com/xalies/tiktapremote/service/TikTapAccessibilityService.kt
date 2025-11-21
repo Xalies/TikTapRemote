@@ -81,40 +81,63 @@ class TikTapAccessibilityService : AccessibilityService() {
             val singleAction = intent.getStringExtra("singleAction")
             val doubleAction = intent.getStringExtra("doubleAction")
 
+            // *** FIX: Extract all coordinate extras ***
+            val singleX = intent.getIntExtra("singleX", 0)
+            val singleY = intent.getIntExtra("singleY", 0)
+            val doubleX = intent.getIntExtra("doubleX", 0)
+            val doubleY = intent.getIntExtra("doubleY", 0)
+
             when (intent.action) {
                 ACTION_START_TARGETING -> {
                     targetPackageForOverlay = packageName
-                    overlayManager.showOverlay(
-                        mode = "targeting",
-                        targetPackageName = packageName,
-                        targetAppName = appName,
-                        selectedTrigger = selectedTrigger,
-                        keyCode = keyCode,
-                        blockInput = blockInput,
-                        existingX = tapX,
-                        existingY = tapY,
-                        singleAction = singleAction,
-                        doubleAction = doubleAction
-                    )
+                    // Pass raw intent to OverlayManager to handle extras flexibly
+                    val overlayIntent = Intent(context, com.xalies.tiktapremote.OverlayActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        putExtra("mode", "targeting")
+                        putExtra("targetPackageName", packageName)
+                        putExtra("targetAppName", appName)
+                        putExtra("selectedTrigger", selectedTrigger)
+                        putExtra("keyCode", keyCode)
+                        putExtra("blockInput", blockInput)
+
+                        // Pass everything
+                        putExtra("singleAction", singleAction)
+                        putExtra("doubleAction", doubleAction)
+                        putExtra("singleX", singleX)
+                        putExtra("singleY", singleY)
+                        putExtra("doubleX", doubleX)
+                        putExtra("doubleY", doubleY)
+
+                        // Legacy for current crosshair position
+                        putExtra("tapX", tapX)
+                        putExtra("tapY", tapY)
+                    }
+                    context.startActivity(overlayIntent)
                 }
                 ACTION_START_GESTURE_RECORDING -> {
                     targetPackageForOverlay = packageName
-                    overlayManager.showOverlay(
-                        mode = "recording",
-                        targetPackageName = packageName,
-                        targetAppName = appName,
-                        selectedTrigger = selectedTrigger,
-                        keyCode = keyCode,
-                        blockInput = blockInput,
-                        existingX = tapX,
-                        existingY = tapY,
-                        singleAction = singleAction,
-                        doubleAction = doubleAction
-                    )
+                    val overlayIntent = Intent(context, com.xalies.tiktapremote.OverlayActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        putExtra("mode", "recording")
+                        putExtra("targetPackageName", packageName)
+                        putExtra("targetAppName", appName)
+                        putExtra("selectedTrigger", selectedTrigger)
+                        putExtra("keyCode", keyCode)
+                        putExtra("blockInput", blockInput)
+
+                        // Pass everything to preserve state
+                        putExtra("singleAction", singleAction)
+                        putExtra("doubleAction", doubleAction)
+                        putExtra("singleX", singleX)
+                        putExtra("singleY", singleY)
+                        putExtra("doubleX", doubleX)
+                        putExtra("doubleY", doubleY)
+                    }
+                    context.startActivity(overlayIntent)
                 }
                 ACTION_STOP_TARGETING -> {
                     targetPackageForOverlay = null
-                    overlayManager.removeOverlay()
+                    // OverlayActivity closes itself via finish()
                 }
             }
         }
