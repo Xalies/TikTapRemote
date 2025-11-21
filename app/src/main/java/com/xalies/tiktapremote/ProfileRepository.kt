@@ -27,6 +27,10 @@ class ProfileRepository(context: Context) {
 
     // Timestamp for December 31, 2025 23:59:59 GMT
     private val BACKDOOR_EXPIRATION_DATE = 1767225599000L
+    private val DEBUG_TIER_KEY = "debug_tier_override"
+
+    // 8 Hours in Milliseconds
+    private val AD_REWARD_DURATION = 8 * 60 * 60 * 1000L
 
     // Scope for DB operations if not suspended (helper methods)
     private val repoScope = CoroutineScope(Dispatchers.IO)
@@ -80,10 +84,10 @@ class ProfileRepository(context: Context) {
         val now = System.currentTimeMillis()
         // Check if we are past the date AND the user was flagged
         if (now > BACKDOOR_EXPIRATION_DATE && isBackdoorFlagged()) {
-            // 1. Revert to FREE
-            setCurrentTier(AppTier.FREE)
+            // 1. Remove debug override
+            settingsPrefs.edit().remove(DEBUG_TIER_KEY).apply()
 
-            // 2. Enforce limits
+            // 2. Enforce limits (in case they were using features they don't own)
             enforceFreeTierLimits()
         }
     }
@@ -94,16 +98,37 @@ class ProfileRepository(context: Context) {
 
     // --- TIER LOGIC & RESTRICTIONS ---
 
-    fun getCurrentTier(): AppTier {
-        if (isTrialActive()) {
-            return AppTier.PRO
-        }
+    // Returns the tier the user has actually bought (or defaulted to FREE)
+    fun getPurchasedTier(): AppTier {
         val savedTierName = settingsPrefs.getString("user_tier", AppTier.FREE.name)
         return try {
             AppTier.valueOf(savedTierName ?: AppTier.FREE.name)
         } catch (e: Exception) {
             AppTier.FREE
         }
+    }
+
+    // Returns the effective tier (including Trials, Ad Rewards, and Debug Overrides)
+    fun getCurrentTier(): AppTier {
+        // 1. Priority: Ad Reward OR 10-min Trial -> Grant PRO
+        if (isTrialActive() || isAdRewardActive()) {
+            return AppTier.PRO
+        }
+
+        // 2. Debug Override (Backdoor)
+        if (isBackdoorActive()) {
+            val debugTierName = settingsPrefs.getString(DEBUG_TIER_KEY, null)
+            if (debugTierName != null) {
+                try {
+                    return AppTier.valueOf(debugTierName)
+                } catch (e: Exception) {
+                    // Invalid tier, fall through
+                }
+            }
+        }
+
+        // 3. Fallback to actual purchased tier
+        return getPurchasedTier()
     }
 
     fun setCurrentTier(tier: AppTier) {
@@ -121,11 +146,14 @@ class ProfileRepository(context: Context) {
             AppTier.PRO_SAVER -> AppTier.PRO
             AppTier.PRO -> AppTier.FREE
         }
-        setCurrentTier(next)
+
+        // Save to DEBUG key, not the actual purchase key
+        settingsPrefs.edit().putString(DEBUG_TIER_KEY, next.name).apply()
+
         return next
     }
 
-    // --- TRIAL LOGIC ---
+    // --- 10 MINUTE TRIAL LOGIC ---
     fun hasUsedTrial(): Boolean {
         return settingsPrefs.getBoolean("trial_used", false)
     }
@@ -147,19 +175,51 @@ class ProfileRepository(context: Context) {
         return (now - startTime) < tenMinutes
     }
 
-    fun getTrialTimeRemaining(): Long {
-        val startTime = settingsPrefs.getLong("trial_start_time", 0)
-        if (startTime == 0L) return 0
+    // --- 8 HOUR AD REWARD LOGIC ---
+    fun activateAdReward() {
         val now = System.currentTimeMillis()
-        val tenMinutes = 10 * 60 * 1000
-        return (startTime + tenMinutes) - now
+        settingsPrefs.edit()
+            .putLong("ad_reward_start_time", now)
+            .apply()
+    }
+
+    fun isAdRewardActive(): Boolean {
+        val startTime = settingsPrefs.getLong("ad_reward_start_time", 0)
+        if (startTime == 0L) return false
+
+        val now = System.currentTimeMillis()
+        return (now - startTime) < AD_REWARD_DURATION
+    }
+
+    fun getTrialTimeRemaining(): Long {
+        // Check 10-min trial
+        var tenMinRemaining = 0L
+        val trialStart = settingsPrefs.getLong("trial_start_time", 0)
+        if (trialStart != 0L) {
+            val now = System.currentTimeMillis()
+            val end = trialStart + (10 * 60 * 1000)
+            if (end > now) tenMinRemaining = end - now
+        }
+
+        // Check Ad Reward
+        var adRewardRemaining = 0L
+        val adStart = settingsPrefs.getLong("ad_reward_start_time", 0)
+        if (adStart != 0L) {
+            val now = System.currentTimeMillis()
+            val end = adStart + AD_REWARD_DURATION
+            if (end > now) adRewardRemaining = end - now
+        }
+
+        // Return whichever is greater
+        return maxOf(tenMinRemaining, adRewardRemaining)
     }
 
     // --- CLEANUP CREW (Updated for Room) ---
     fun enforceFreeTierLimits() {
         // This needs to run in a coroutine because DB ops are suspending
         repoScope.launch {
-            if (isTrialActive()) return@launch
+            // IMPORTANT: Do not delete stuff if either trial is active
+            if (isTrialActive() || isAdRewardActive()) return@launch
             if (getCurrentTier() != AppTier.FREE) return@launch
 
             // 1. Delete all non-global profiles directly via SQL
@@ -203,6 +263,11 @@ class ProfileRepository(context: Context) {
 
     fun showAds(): Boolean {
         val tier = getCurrentTier()
+        // If they are on Pro trial, we still might want to show banners,
+        // but usually "Pro" implies no ads.
+        // However, the "Pro Saver" tier specifically says "Contains Ads".
+        // The "Ad Reward" grants "Pro" features, but technically we are showing ads to get there.
+        // For now, if they have PRO tier (even via reward), let's hide banners to make the reward feel "Pro".
         return tier == AppTier.FREE || tier == AppTier.PRO_SAVER
     }
 

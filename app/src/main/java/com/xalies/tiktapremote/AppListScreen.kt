@@ -1,40 +1,35 @@
 package com.xalies.tiktapremote
 
+import android.app.Activity
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.drawable.toBitmap
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import coil.compose.rememberAsyncImagePainter
 
 data class AppInfo(
@@ -57,19 +52,19 @@ fun AppListScreen(
     // Observe profiles to check for duplicates
     val profiles by ProfileManager.profiles.collectAsState()
 
-    // State for the trial dialog
-    var showTrialDialog by remember { mutableStateOf(false) }
+    // State for the trial selection dialog
+    var showTrialSelectionDialog by remember { mutableStateOf(false) }
     var selectedAppForTrial by remember { mutableStateOf<AppInfo?>(null) }
 
     val apps = remember {
         val globalProfileAppInfo = AppInfo(
             name = "Global Profile",
             packageName = GLOBAL_PROFILE_PACKAGE_NAME,
-            icon = null // We'll handle the icon separately
+            icon = null
         )
 
         val installedApps = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-            .filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 } // Filter out system apps
+            .filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
             .map { appInfo ->
                 AppInfo(
                     name = packageManager.getApplicationLabel(appInfo).toString(),
@@ -81,19 +76,40 @@ fun AppListScreen(
         listOf(globalProfileAppInfo) + installedApps
     }
 
-    if (showTrialDialog && selectedAppForTrial != null) {
-        TrialOfferDialog(
+    if (showTrialSelectionDialog && selectedAppForTrial != null) {
+        TrialSelectionDialog(
+            isOneTimeTrialAvailable = !repository.hasUsedTrial(),
             onDismiss = {
-                showTrialDialog = false
+                showTrialSelectionDialog = false
                 selectedAppForTrial = null
             },
-            onAccept = {
+            onStartOneTimeTrial = {
                 repository.activateTrial()
                 Toast.makeText(context, "10-Minute Trial Started!", Toast.LENGTH_LONG).show()
-                showTrialDialog = false
+                showTrialSelectionDialog = false
                 // Proceed to the app that was clicked
                 onAppClick(selectedAppForTrial!!)
                 selectedAppForTrial = null
+            },
+            onWatchAdForTrial = {
+                val activity = context as? Activity
+                if (activity != null) {
+                    AdManager.showRewardedAd(
+                        activity = activity,
+                        onRewardEarned = {
+                            repository.activateAdReward()
+                            Toast.makeText(context, "8-Hour Pro Trial Unlocked!", Toast.LENGTH_LONG).show()
+                            showTrialSelectionDialog = false
+                            onAppClick(selectedAppForTrial!!)
+                            selectedAppForTrial = null
+                        },
+                        onDismissed = {
+                            // Ad closed, do nothing unless reward was earned (handled above)
+                        }
+                    )
+                } else {
+                    Toast.makeText(context, "Error loading ad context", Toast.LENGTH_SHORT).show()
+                }
             }
         )
     }
@@ -116,29 +132,24 @@ fun AppListScreen(
                 AppListItem(
                     app = app,
                     onClick = {
-                        // 0. Check if a profile already exists (Duplicate Check)
                         val profileExists = profiles.any { it.packageName == app.packageName }
                         if (profileExists) {
                             Toast.makeText(context, "A profile already exists for this app", Toast.LENGTH_SHORT).show()
                             return@AppListItem
                         }
 
-                        // 1. Always allow Global Profile
                         if (app.packageName == GLOBAL_PROFILE_PACKAGE_NAME) {
                             onAppClick(app)
                         } else {
-                            // 2. Free Tier Check
                             val tier = repository.getCurrentTier()
+                            // Check if ANY trial is active OR if they have purchased a tier
                             if (tier == AppTier.FREE) {
-                                if (!repository.hasUsedTrial()) {
-                                    // Feature: Trigger Trial Offer
-                                    selectedAppForTrial = app
-                                    showTrialDialog = true
-                                } else {
-                                    Toast.makeText(context, "App Profiles require Essentials Tier. Free Tier is Global Only.", Toast.LENGTH_LONG).show()
-                                }
+                                // If neither purchased nor in an active trial, show the selection dialog
+                                // (Note: getCurrentTier() returns PRO if a trial is active, so this block only runs if NO trial is active)
+                                selectedAppForTrial = app
+                                showTrialSelectionDialog = true
                             } else {
-                                // Essentials/Pro users allowed (Limit checked at FAB)
+                                // Essentials/Pro users (or Active Trial users) allowed
                                 onAppClick(app)
                             }
                         }
@@ -171,7 +182,7 @@ fun AppListItem(
         } else {
             Image(
                 painter = rememberAsyncImagePainter(model = app.icon),
-                contentDescription = null, // Decorative
+                contentDescription = null,
                 modifier = Modifier.size(40.dp)
             )
         }
@@ -179,6 +190,83 @@ fun AppListItem(
             text = app.name,
             modifier = Modifier.padding(start = 16.dp)
         )
+    }
+}
+
+@Composable
+fun TrialSelectionDialog(
+    isOneTimeTrialAvailable: Boolean,
+    onDismiss: () -> Unit,
+    onStartOneTimeTrial: () -> Unit,
+    onWatchAdForTrial: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            elevation = CardDefaults.cardElevation(8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    "Unlock Pro Features?",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    "To create App Profiles, you need a Pro tier. Choose an option below:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Option 1: 10 Minute Trial (One-Time)
+                if (isOneTimeTrialAvailable) {
+                    Button(
+                        onClick = onStartOneTimeTrial,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        Icon(Icons.Default.Timer, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("10-Minute Test Drive")
+                    }
+                    Text(
+                        "Instant access. One time only.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                }
+
+                // Option 2: Watch Ad for 8 Hours (Repeatable)
+                Button(
+                    onClick = onWatchAdForTrial,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Watch Ad for 8 Hours")
+                }
+                Text(
+                    "Repeatable anytime.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+            }
+        }
     }
 }
 

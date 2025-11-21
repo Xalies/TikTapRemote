@@ -32,7 +32,9 @@ fun PurchaseScreen(
     val productDetails by BillingManager.productDetails.collectAsState()
     val purchaseStatus by BillingManager.purchaseStatus.collectAsState()
     val repository = remember { ProfileRepository(context) }
-    val currentTier = repository.getCurrentTier()
+
+    // Use getPurchasedTier to determine ownership, allowing buy buttons to remain active during trials
+    val purchasedTier = repository.getPurchasedTier()
 
     Scaffold(
         topBar = {
@@ -71,7 +73,7 @@ fun PurchaseScreen(
                 title = "Essentials",
                 price = productDetails[BillingManager.SKU_ESSENTIALS]?.oneTimePurchaseOfferDetails?.formattedPrice ?: "Unavailable",
                 features = listOf("2 App Profiles", "Customize Trigger Key", "Double Tap Actions", "Swipe Down Actions"),
-                isCurrent = currentTier == AppTier.ESSENTIALS,
+                isOwned = purchasedTier == AppTier.ESSENTIALS,
                 onBuy = { activity?.let { BillingManager.launchPurchaseFlow(it, BillingManager.SKU_ESSENTIALS) } }
             )
 
@@ -81,7 +83,7 @@ fun PurchaseScreen(
                 title = "Pro Saver",
                 price = productDetails[BillingManager.SKU_PRO_SAVER]?.oneTimePurchaseOfferDetails?.formattedPrice ?: "Unavailable",
                 features = listOf("Unlimited App Profiles", "Swipe Left/Right", "Gesture Recording", "Repeat Mode", "Contains Ads"),
-                isCurrent = currentTier == AppTier.PRO_SAVER,
+                isOwned = purchasedTier == AppTier.PRO_SAVER,
                 recommended = true,
                 onBuy = { activity?.let { BillingManager.launchPurchaseFlow(it, BillingManager.SKU_PRO_SAVER) } }
             )
@@ -92,7 +94,7 @@ fun PurchaseScreen(
                 title = "Pro",
                 price = productDetails[BillingManager.SKU_PRO]?.oneTimePurchaseOfferDetails?.formattedPrice ?: "Unavailable",
                 features = listOf("Everything in Pro Saver", "NO ADS", "Support Development ❤️"),
-                isCurrent = currentTier == AppTier.PRO,
+                isOwned = purchasedTier == AppTier.PRO,
                 onBuy = { activity?.let { BillingManager.launchPurchaseFlow(it, BillingManager.SKU_PRO) } }
             )
         }
@@ -104,7 +106,7 @@ fun TierCard(
     title: String,
     price: String,
     features: List<String>,
-    isCurrent: Boolean,
+    isOwned: Boolean,
     recommended: Boolean = false,
     onBuy: () -> Unit
 ) {
@@ -128,8 +130,8 @@ fun TierCard(
                         Text("Best Value", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     }
                 }
-                if (isCurrent) {
-                    Icon(Icons.Default.Check, "Current", tint = Color.Green)
+                if (isOwned) {
+                    Icon(Icons.Default.Check, "Owned", tint = Color.Green)
                 }
             }
 
@@ -147,11 +149,11 @@ fun TierCard(
 
             Button(
                 onClick = onBuy,
-                enabled = !isCurrent,
+                enabled = !isOwned,
                 modifier = Modifier.fillMaxWidth(),
                 colors = if (recommended) ButtonDefaults.buttonColors() else ButtonDefaults.filledTonalButtonColors()
             ) {
-                Text(if (isCurrent) "Owned" else "Buy $price")
+                Text(if (isOwned) "Owned" else "Buy $price")
             }
         }
     }

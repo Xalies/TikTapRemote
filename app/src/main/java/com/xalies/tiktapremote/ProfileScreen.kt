@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -93,7 +92,8 @@ fun ProfileScreen(
     }
 
     var timeRemaining by remember { mutableStateOf(repository.getTrialTimeRemaining()) }
-    if (repository.isTrialActive()) {
+    // Check both trial types
+    if (repository.isTrialActive() || repository.isAdRewardActive()) {
         LaunchedEffect(Unit) {
             while(timeRemaining > 0) {
                 kotlinx.coroutines.delay(1000)
@@ -199,12 +199,12 @@ fun ProfileScreen(
     }
 
     if (showTrialDialog) {
-        TrialOfferDialog(onDismiss = { showTrialDialog = false }, onAccept = {
-            repository.activateTrial()
-            refreshTier()
-            showTrialDialog = false
-            Toast.makeText(context, "10-Minute Trial Started!", Toast.LENGTH_LONG).show()
-        })
+        AlertDialog(
+            onDismissRequest = { showTrialDialog = false },
+            title = { Text("Feature Locked") },
+            text = { Text("This feature requires Pro. Please go to the App List (+) to activate a trial or upgrade.") },
+            confirmButton = { TextButton(onClick = { showTrialDialog = false }) { Text("OK") } }
+        )
     }
 
     Scaffold(
@@ -242,14 +242,16 @@ fun ProfileScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (repository.isTrialActive()) {
-                val minutes = TimeUnit.MILLISECONDS.toMinutes(timeRemaining)
+            // Display time remaining in hours/mins/secs
+            if (repository.isTrialActive() || repository.isAdRewardActive()) {
+                val hours = TimeUnit.MILLISECONDS.toHours(timeRemaining)
+                val minutes = TimeUnit.MILLISECONDS.toMinutes(timeRemaining) % 60
                 val seconds = TimeUnit.MILLISECONDS.toSeconds(timeRemaining) % 60
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer), modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Timer, null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text("Trial Active: %02d:%02d".format(minutes, seconds), color = MaterialTheme.colorScheme.onTertiaryContainer, fontWeight = FontWeight.Bold)
+                        Text("Trial Active: %02d:%02d:%02d".format(hours, minutes, seconds), color = MaterialTheme.colorScheme.onTertiaryContainer, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -260,7 +262,7 @@ fun ProfileScreen(
                     subtitle = if (!canConfigKey) "Volume Up (Locked)" else (keyCode.let { mapKeyCodeToString(it) }),
                     icon = Icons.Rounded.Settings,
                     isEnabled = canConfigKey,
-                    onClick = { if(canConfigKey) showKeycodeDialog = true else if (!repository.hasUsedTrial()) showTrialDialog = true else Toast.makeText(context, "Requires Essentials", Toast.LENGTH_SHORT).show() }
+                    onClick = { if(canConfigKey) showKeycodeDialog = true else showTrialDialog = true }
                 )
             }
 
@@ -275,7 +277,7 @@ fun ProfileScreen(
                     Box(
                         modifier = Modifier.weight(1f).fillMaxHeight().padding(3.dp).clip(RoundedCornerShape(19.dp))
                             .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
-                            .clickable { if(isLocked) { if (!repository.hasUsedTrial()) showTrialDialog = true else Toast.makeText(context, "Requires Essentials", Toast.LENGTH_SHORT).show() } else selectedTriggerForAssignment = trigger },
+                            .clickable { if(isLocked) { showTrialDialog = true } else selectedTriggerForAssignment = trigger },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(text = if (isLocked) "$label 🔒" else label, style = MaterialTheme.typography.labelMedium, color = if (isSelected) MaterialTheme.colorScheme.onPrimary else if (isLocked) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f) else MaterialTheme.colorScheme.onSurface)
@@ -284,7 +286,6 @@ fun ProfileScreen(
             }
 
             // --- SECTION: TAPS & GESTURES ---
-            // Left aligned header for taps
             Text("Taps & Gestures", style = MaterialTheme.typography.titleMedium, modifier = Modifier.align(Alignment.Start).padding(top=8.dp))
 
             val tapActions = ActionType.values().filter { it.name.contains("TAP") || it == ActionType.RECORDED }
@@ -294,7 +295,6 @@ fun ProfileScreen(
                     val isAssigned = assignedActions[selectedTriggerForAssignment]?.type == action
                     val isAllowed = repository.isActionAllowed(action)
 
-                    // Renaming "Recorded" to "Record"
                     val label = if (action == ActionType.RECORDED) "Record" else action.name.toFriendlyName()
 
                     ActionIconItem(
@@ -304,8 +304,7 @@ fun ProfileScreen(
                         isEnabled = isAllowed,
                         onClick = {
                             if (isAllowed) assignedActions = assignedActions.toMutableMap().apply { this[selectedTriggerForAssignment] = Action(action) }
-                            else if (!repository.hasUsedTrial()) showTrialDialog = true
-                            else Toast.makeText(context, "Locked Feature", Toast.LENGTH_SHORT).show()
+                            else showTrialDialog = true
                         }
                     )
                     Spacer(modifier = Modifier.width(16.dp))
@@ -320,7 +319,6 @@ fun ProfileScreen(
                     val isAssigned = assignedActions[selectedTriggerForAssignment]?.type == action
                     val isAllowed = repository.isActionAllowed(action)
 
-                    // Pass null label to hide text for swipes
                     ActionIconItem(
                         label = null,
                         icon = getIconForAction(action),
@@ -328,15 +326,13 @@ fun ProfileScreen(
                         isEnabled = isAllowed,
                         onClick = {
                             if (isAllowed) assignedActions = assignedActions.toMutableMap().apply { this[selectedTriggerForAssignment] = Action(action) }
-                            else if (!repository.hasUsedTrial()) showTrialDialog = true
-                            else Toast.makeText(context, "Locked Feature", Toast.LENGTH_SHORT).show()
+                            else showTrialDialog = true
                         }
                     )
                     if (index < swipeActions.size - 1) Spacer(modifier = Modifier.width(16.dp))
                 }
             }
 
-            // Centered footer for swipes
             Text("Swipes", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
 
             // Selected Action Detail View
@@ -357,18 +353,16 @@ fun ProfileScreen(
                 })
             }
 
-// Options & Repeat
+            // Options & Repeat
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    // --- NEW EXCLUSIVE MODE SWITCH ---
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Icon to show "No Volume"
                         Icon(
                             imageVector = if (blockRemoteInput) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
                             contentDescription = null,
@@ -379,7 +373,7 @@ fun ProfileScreen(
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Exclusive Mode", // Rebranded name
+                                text = "Exclusive Mode",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -397,7 +391,6 @@ fun ProfileScreen(
                         )
                     }
 
-                    // Helper Tip (Only visible when enabled)
                     if (blockRemoteInput) {
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -423,12 +416,10 @@ fun ProfileScreen(
                             }
                         }
                     }
-                    // --------------------------------
 
                     if (canRepeat) {
-                        Spacer(modifier = Modifier.height(12.dp)) // Add some spacing before divider
+                        Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
-                        // ... existing repeat logic ...
                         val keyName = mapKeyCodeToString(keyCode)
                         Text("Repeat Interval (Hold $keyName 1s to Toggle)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top=8.dp))
                         Slider(value = repeatInterval, onValueChange = { repeatInterval = it }, valueRange = 3000f..30000f, steps = 26)
@@ -454,11 +445,6 @@ fun ProfileScreen(
             }
         }
     }
-}
-
-@Composable
-fun TrialOfferDialog(onDismiss: () -> Unit, onAccept: () -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, icon = { Icon(Icons.Rounded.Stars, null) }, title = { Text("Try Pro?") }, text = { Text("Unlock all features for 10 mins free!") }, confirmButton = { Button(onClick = onAccept) { Text("Start") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("No") } })
 }
 
 @Composable
@@ -492,18 +478,9 @@ fun ActionIconItem(
                 Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(26.dp), tint = contentColor)
             }
         }
-        // Handle null label (for swipes)
         if (label != null) {
             Text(text = label, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, maxLines = 1, fontSize = 11.sp)
         }
-    }
-}
-
-@Composable
-private fun SettingsRow(text: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(text, style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = checked, onCheckedChange = onCheckedChange, modifier = Modifier.scale(0.8f))
     }
 }
 
@@ -522,10 +499,9 @@ fun getIconForAction(actionType: ActionType): ImageVector {
         ActionType.SWIPE_DOWN -> Icons.Rounded.SwipeDown
         ActionType.SWIPE_LEFT -> Icons.Rounded.SwipeLeft
         ActionType.SWIPE_RIGHT -> Icons.Rounded.SwipeRight
-        // Use same icon as Tap
         ActionType.DOUBLE_TAP -> Icons.Rounded.TouchApp
         ActionType.TAP -> Icons.Rounded.TouchApp
-        ActionType.RECORDED -> Icons.Rounded.Gesture // thread_unread is not in the standard library yet
+        ActionType.RECORDED -> Icons.Rounded.Gesture
         else -> Icons.Rounded.SmartButton
     }
 }
@@ -537,16 +513,10 @@ fun AdMobBanner() {
         factory = { context ->
             AdView(context).apply {
                 setAdSize(AdSize.BANNER)
-                // Use the Test Ad Unit ID for now
-                adUnitId = "ca-app-pub-3940256099942544/6300978111"
+                // Updated Banner ID
+                adUnitId = "ca-app-pub-9083635854272688/7237298124"
                 loadAd(AdRequest.Builder().build())
             }
         }
     )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun ProfileScreenPreview() {
-    ProfileScreen(appInfo = AppInfo("Sample App", "com.sample.app", null), initialX = "100", initialY = "200", initialKeyCode = "24", initialBlockInput = false, initialShowVisualIndicator = false, initialActions = emptyMap(), onBackClick = {})
 }

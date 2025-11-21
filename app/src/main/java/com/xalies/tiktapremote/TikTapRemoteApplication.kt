@@ -7,5 +7,6 @@ class TikTapRemoteApplication : Application() {
         super.onCreate()
         ProfileManager.initialize(this)
         BillingManager.initialize(this) // Initialize Billing
+        AdManager.initialize(this) // Initialize AdMob
     }
 }
