@@ -11,9 +11,12 @@ import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,7 +62,6 @@ fun ProfileScreen(
     val repository = remember { ProfileRepository(context) }
 
     // *** DB OBSERVATION ***
-    // This connects the UI directly to the database. When OverlayActivity saves, this updates.
     val profiles by ProfileManager.profiles.collectAsState()
     val liveProfile = profiles.find { it.packageName == appInfo.packageName }
 
@@ -125,9 +127,21 @@ fun ProfileScreen(
         }
     }
 
-    val isSavable = assignedActions.isNotEmpty()
+    // *** STRICT SAVE CHECK ***
+    // Only allow manual saving if:
+    // 1. At least one action exists.
+    // 2. All assigned actions have valid data (either RECORDED or have non-zero coordinates).
+    val isSavable = assignedActions.isNotEmpty() && assignedActions.values.all { action ->
+        if (action.type == ActionType.RECORDED) {
+            // Recorded gestures must have data
+            !action.recordedGesture.isNullOrEmpty()
+        } else {
+            // Tap/Swipe must have coordinates
+            action.tapX != 0 && action.tapY != 0
+        }
+    }
 
-    // Helper to save BEFORE launching overlay
+    // Helper to save BEFORE launching overlay (Internal use only)
     fun saveProfileLocally() {
         val fallbackX = assignedActions[TriggerType.SINGLE_PRESS]?.tapX ?: 0
         val fallbackY = assignedActions[TriggerType.SINGLE_PRESS]?.tapY ?: 0
@@ -147,7 +161,6 @@ fun ProfileScreen(
 
     fun launchAppForAction(isRecording: Boolean) {
         // *** SAVE FIRST ***
-        // This ensures OverlayActivity reads the current state (including the other trigger) from DB
         saveProfileLocally()
 
         val action = if (isRecording) ACTION_START_GESTURE_RECORDING else ACTION_START_TARGETING
@@ -210,6 +223,7 @@ fun ProfileScreen(
                 title = { Text("Profile: ${appInfo.name}", fontSize = 20.sp) },
                 navigationIcon = { IconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                 actions = {
+                    // User-facing Save button: Strictly controlled by `isSavable`
                     TextButton(onClick = {
                         if (isSavable) {
                             saveProfileLocally()
@@ -260,11 +274,12 @@ fun ProfileScreen(
 
                     val label = trigger.name.toFriendlyName()
 
-                    Box(
-                        modifier = Modifier.weight(1f).fillMaxHeight().padding(3.dp).clip(RoundedCornerShape(19.dp))
-                            .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
-                            .clickable { if(isLocked) { showTrialDialog = true } else selectedTriggerForAssignment = trigger },
-                        contentAlignment = Alignment.Center
+                    // *** ANIMATED CLICKABLE BOX ***
+                    BouncingBox(
+                        modifier = Modifier.weight(1f).fillMaxHeight().padding(3.dp),
+                        isSelected = isSelected,
+                        isLocked = isLocked,
+                        onClick = { if(isLocked) { showTrialDialog = true } else selectedTriggerForAssignment = trigger }
                     ) {
                         Text(text = if (isLocked) "$label 🔒" else label, style = MaterialTheme.typography.labelMedium, color = if (isSelected) MaterialTheme.colorScheme.onPrimary else if (isLocked) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f) else MaterialTheme.colorScheme.onSurface)
                     }
@@ -367,7 +382,7 @@ fun ProfileScreen(
                     title = title,
                     subtitle = subtitle,
                     icon = if (isRecordedType) Icons.Rounded.FiberManualRecord else Icons.Rounded.Place,
-                    isEnabled = isActionSelected, // *** DISABLE if no action ***
+                    isEnabled = isActionSelected,
                     onClick = {
                         if (isActionSelected) {
                             val isRecording = isRecordedType
@@ -491,6 +506,31 @@ fun SettingItem(title: String, subtitle: String, icon: ImageVector, isEnabled: B
     }
 }
 
+// Helper composable for the bouncy tab effect
+@Composable
+fun BouncingBox(
+    modifier: Modifier = Modifier,
+    isSelected: Boolean,
+    isLocked: Boolean,
+    onClick: () -> Unit,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val scale by animateFloatAsState(if (isPressed) 0.95f else 1f, label = "scale")
+
+    Box(
+        modifier = modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(19.dp))
+            .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick), // Custom indication logic if needed, null for now to rely on scale
+        contentAlignment = Alignment.Center,
+        content = content
+    )
+}
+
 @Composable
 fun ActionIconItem(
     label: String?,
@@ -503,8 +543,26 @@ fun ActionIconItem(
     val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
     val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(56.dp).alpha(if (isEnabled) 1f else 0.5f)) {
-        Card(onClick = onClick, enabled = true, modifier = Modifier.size(56.dp), colors = CardDefaults.cardColors(containerColor = containerColor), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, borderColor)) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (isPressed) 0.9f else 1f, label = "scale")
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .width(56.dp)
+            .alpha(if (isEnabled) 1f else 0.5f)
+            .scale(scale)
+    ) {
+        Card(
+            onClick = onClick,
+            enabled = true,
+            modifier = Modifier.size(56.dp),
+            colors = CardDefaults.cardColors(containerColor = containerColor),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, borderColor),
+            interactionSource = interactionSource
+        ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(26.dp), tint = contentColor)
             }

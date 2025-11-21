@@ -1,13 +1,12 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
--->
+<?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Include the SharedPreferences file where settings and tiers are stored -->
+    <include domain="sharedpref" path="TikTapRemoteSettings.xml" />
+
+    <!-- Include the Room Database where profiles are stored -->
+    <!-- Note: Room databases often have -wal and -shm files, so we include the root name to capture them all if possible,
+         or specify them explicitly. The wildcards here ensure we get the db and its auxiliary files. -->
+    <include domain="database" path="tik_tap_remote_database" />
+    <include domain="database" path="tik_tap_remote_database-wal" />
+    <include domain="database" path="tik_tap_remote_database-shm" />
 </full-backup-content>

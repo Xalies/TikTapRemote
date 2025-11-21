@@ -1,19 +1,20 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
--->
+<?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Include SharedPrefs -->
+        <include domain="sharedpref" path="TikTapRemoteSettings.xml" />
+
+        <!-- Include Database -->
+        <include domain="database" path="tik_tap_remote_database" />
+        <include domain="database" path="tik_tap_remote_database-wal" />
+        <include domain="database" path="tik_tap_remote_database-shm" />
     </cloud-backup>
-    <!--
+
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <!-- Same rules for device-to-device transfer -->
+        <include domain="sharedpref" path="TikTapRemoteSettings.xml" />
+        <include domain="database" path="tik_tap_remote_database" />
+        <include domain="database" path="tik_tap_remote_database-wal" />
+        <include domain="database" path="tik_tap_remote_database-shm" />
     </device-transfer>
-    -->
 </data-extraction-rules>

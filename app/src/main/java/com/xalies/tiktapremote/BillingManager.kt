@@ -9,17 +9,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 object BillingManager {
     private const val TAG = "BillingManager"
 
-    // SKU Constants - REPLACE THESE with your actual Google Play Console Product IDs
+    // --- CONFIGURATION ---
+    // UPDATED: Using hyphens (-) instead of underscores (_) to satisfy Google Play Console strict formatting.
     const val SKU_ESSENTIALS = "tier_essentials"
     const val SKU_PRO_SAVER = "tier_pro_saver"
     const val SKU_PRO = "tier_pro"
 
-    private lateinit var billingClient: BillingClient
-    private lateinit var repository: ProfileRepository
+    private val LIST_OF_SKUS = listOf(SKU_ESSENTIALS, SKU_PRO_SAVER, SKU_PRO)
 
     private val _productDetails = MutableStateFlow<Map<String, ProductDetails>>(emptyMap())
     val productDetails = _productDetails.asStateFlow()
@@ -27,21 +28,12 @@ object BillingManager {
     private val _purchaseStatus = MutableStateFlow<String?>(null)
     val purchaseStatus = _purchaseStatus.asStateFlow()
 
-    // Callback for purchase updates
-    private val purchasesUpdatedListener = PurchasesUpdatedListener { billingResult, purchases ->
-        if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
-            for (purchase in purchases) {
-                handlePurchase(purchase)
-            }
-        } else if (billingResult.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
-            _purchaseStatus.value = "Purchase Canceled"
-        } else {
-            _purchaseStatus.value = "Error: ${billingResult.debugMessage}"
-        }
-    }
+    private lateinit var billingClient: BillingClient
+    private lateinit var profileRepository: ProfileRepository
 
     fun initialize(context: Context) {
-        repository = ProfileRepository(context)
+        profileRepository = ProfileRepository(context)
+
         billingClient = BillingClient.newBuilder(context)
             .setListener(purchasesUpdatedListener)
             .enablePendingPurchases()
@@ -55,62 +47,65 @@ object BillingManager {
             override fun onBillingSetupFinished(billingResult: BillingResult) {
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                     Log.d(TAG, "Billing Setup Finished")
-                    queryAvailableProducts()
-                    queryPurchases() // Check for existing purchases (restoring transactions)
+                    querySkuDetails()
+                    queryPurchases() // Check what they already own
                 }
             }
 
             override fun onBillingServiceDisconnected() {
-                // Retry connection logic could go here
-                Log.e(TAG, "Billing Disconnected")
+                Log.d(TAG, "Billing Disconnected")
+                // Retry logic could go here
             }
         })
     }
 
-    private fun queryAvailableProducts() {
-        val productList = listOf(
-            QueryProductDetailsParams.Product.newBuilder()
-                .setProductId(SKU_ESSENTIALS)
-                .setProductType(BillingClient.ProductType.INAPP)
-                .build(),
-            QueryProductDetailsParams.Product.newBuilder()
-                .setProductId(SKU_PRO_SAVER)
-                .setProductType(BillingClient.ProductType.INAPP)
-                .build(),
-            QueryProductDetailsParams.Product.newBuilder()
-                .setProductId(SKU_PRO)
-                .setProductType(BillingClient.ProductType.INAPP)
-                .build()
-        )
-
+    private fun querySkuDetails() {
         val params = QueryProductDetailsParams.newBuilder()
-            .setProductList(productList)
+            .setProductList(
+                LIST_OF_SKUS.map { sku ->
+                    QueryProductDetailsParams.Product.newBuilder()
+                        .setProductId(sku)
+                        .setProductType(BillingClient.ProductType.INAPP)
+                        .build()
+                }
+            )
             .build()
 
         billingClient.queryProductDetailsAsync(params) { billingResult, productDetailsList ->
             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                val map = productDetailsList.associateBy { it.productId }
-                _productDetails.value = map
+                val detailsMap = productDetailsList.associateBy { it.productId }
+                _productDetails.value = detailsMap
             }
         }
     }
 
-    fun launchPurchaseFlow(activity: Activity, skuId: String) {
-        val productDetails = _productDetails.value[skuId]
-        if (productDetails != null) {
-            val productDetailsParamsList = listOf(
-                BillingFlowParams.ProductDetailsParams.newBuilder()
-                    .setProductDetails(productDetails)
-                    .build()
-            )
-
-            val billingFlowParams = BillingFlowParams.newBuilder()
-                .setProductDetailsParamsList(productDetailsParamsList)
+    fun launchPurchaseFlow(activity: Activity, sku: String) {
+        val details = _productDetails.value[sku]
+        if (details != null) {
+            val flowParams = BillingFlowParams.newBuilder()
+                .setProductDetailsParamsList(
+                    listOf(
+                        BillingFlowParams.ProductDetailsParams.newBuilder()
+                            .setProductDetails(details)
+                            .build()
+                    )
+                )
                 .build()
-
-            billingClient.launchBillingFlow(activity, billingFlowParams)
+            billingClient.launchBillingFlow(activity, flowParams)
         } else {
-            _purchaseStatus.value = "Product details not found"
+            _purchaseStatus.value = "Error: Product not found"
+        }
+    }
+
+    private val purchasesUpdatedListener = PurchasesUpdatedListener { billingResult, purchases ->
+        if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
+            for (purchase in purchases) {
+                handlePurchase(purchase)
+            }
+        } else if (billingResult.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
+            _purchaseStatus.value = "Purchase Canceled"
+        } else {
+            _purchaseStatus.value = "Purchase Error: ${billingResult.debugMessage}"
         }
     }
 
@@ -123,37 +118,31 @@ object BillingManager {
 
                 billingClient.acknowledgePurchase(acknowledgePurchaseParams) { billingResult ->
                     if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                        Log.d(TAG, "Purchase Acknowledged")
-                        // Grant Entitlement
-                        grantEntitlement(purchase.products)
+                        grantEntitlement(purchase)
                     }
                 }
             } else {
-                grantEntitlement(purchase.products)
+                grantEntitlement(purchase)
             }
         }
     }
 
-    private fun grantEntitlement(products: List<String>) {
-        CoroutineScope(Dispatchers.Main).launch {
-            // LEGIT PURCHASE CHECK:
-            // If the user bought the app, remove the "Backdoor User" flag so they aren't wiped later.
-            repository.setBackdoorUsed(false)
+    private fun grantEntitlement(purchase: Purchase) {
+        CoroutineScope(Dispatchers.IO).launch {
+            for (product in purchase.products) {
+                val tier = when (product) {
+                    SKU_ESSENTIALS -> AppTier.ESSENTIALS
+                    SKU_PRO_SAVER -> AppTier.PRO_SAVER
+                    SKU_PRO -> AppTier.PRO
+                    else -> null
+                }
 
-            when {
-                products.contains(SKU_PRO) -> {
-                    repository.setCurrentTier(AppTier.PRO)
-                    _purchaseStatus.value = "Upgraded to PRO!"
-                }
-                products.contains(SKU_PRO_SAVER) -> {
-                    repository.setCurrentTier(AppTier.PRO_SAVER)
-                    _purchaseStatus.value = "Upgraded to Pro Saver!"
-                }
-                products.contains(SKU_ESSENTIALS) -> {
-                    // Only set Essentials if not already on a higher tier
-                    if (repository.getCurrentTier() == AppTier.FREE) {
-                        repository.setCurrentTier(AppTier.ESSENTIALS)
-                        _purchaseStatus.value = "Upgraded to Essentials!"
+                if (tier != null) {
+                    profileRepository.setCurrentTier(tier)
+                    // If they upgraded, clean up old limits immediately if needed,
+                    // or just let the UI reflect the new capabilities.
+                    withContext(Dispatchers.Main) {
+                        _purchaseStatus.value = "Purchase Successful! You are now on ${tier.name}."
                     }
                 }
             }

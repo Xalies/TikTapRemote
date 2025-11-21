@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Vibration
@@ -30,6 +31,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -66,6 +68,9 @@ fun MainScreen(
 
     val profilesFlow = ProfileManager.profiles.collectAsState()
     val profiles = profilesFlow.value
+
+    // *** ADDED: Track Tier for UI Logic ***
+    var currentTier by remember { mutableStateOf(repository.getCurrentTier()) }
 
     var profileToDelete by remember { mutableStateOf<Profile?>(null) }
     var isServiceGloballyEnabled by remember { mutableStateOf(repository.isServiceEnabled()) }
@@ -120,6 +125,10 @@ fun MainScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                isServiceGloballyEnabled = repository.isServiceEnabled()
+                // Refresh tier to ensure locked state is accurate
+                currentTier = repository.getCurrentTier()
+
                 hasOverlayPermission = Settings.canDrawOverlays(context)
                 isAccessibilityServiceEnabled = isAccessibilityServiceEnabled(context)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -225,6 +234,7 @@ fun MainScreen(
                             if (repository.isBackdoorActive()) {
                                 repository.setBackdoorUsed(true)
                                 val newTier = repository.cycleTier()
+                                currentTier = newTier // Update local state immediately
                                 Toast.makeText(context, "🕵️ Debug: Switched to ${newTier.name}", Toast.LENGTH_LONG).show()
                             }
                             debugClickCount = 0
@@ -287,13 +297,36 @@ fun MainScreen(
             }
 
             if (profileNavInfos.isEmpty()) {
-                Text(text = "No profiles saved yet. Tap the '+' button to add one.")
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Public,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "No profiles saved yet",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Tap the '+' button to create one",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(profileNavInfos) { profileInfo ->
                         val originalProfile = profiles.find { it.packageName == profileInfo.packageName }
                         ProfileListItem(
                             profileNavInfo = profileInfo,
+                            currentTier = currentTier, // Pass tier to item
                             onClick = { onProfileClick(profileInfo) },
                             onLongClick = { profileToDelete = originalProfile },
                             onDoubleClick = {
@@ -393,6 +426,7 @@ fun DeleteConfirmationDialog(profileName: String, onConfirm: () -> Unit, onDismi
 @Composable
 fun ProfileListItem(
     profileNavInfo: ProfileNavInfo,
+    currentTier: AppTier, // Added
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onDoubleClick: () -> Unit,
@@ -406,6 +440,13 @@ fun ProfileListItem(
         null
     }
 
+    // Determine if this profile is effectively "locked" due to tier limits
+    // Logic: It's an App Profile (not Global), it's disabled, and user is on FREE tier.
+    // (Normally, free tier allows 0 app profiles, so any disabled app profile is effectively locked).
+    val isLocked = !profileNavInfo.isEnabled &&
+            profileNavInfo.packageName != GLOBAL_PROFILE_PACKAGE_NAME &&
+            currentTier == AppTier.FREE
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -414,7 +455,8 @@ fun ProfileListItem(
                 onLongClick = onLongClick,
                 onDoubleClick = onDoubleClick
             )
-            .padding(vertical = 8.dp),
+            .padding(vertical = 8.dp)
+            .alpha(if (isLocked) 0.5f else 1f), // Grey out if locked
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (profileNavInfo.packageName == GLOBAL_PROFILE_PACKAGE_NAME) {
@@ -430,16 +472,34 @@ fun ProfileListItem(
                 modifier = Modifier.size(40.dp)
             )
         }
-        Text(
-            text = profileNavInfo.appName,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 16.dp)
-        )
-        Checkbox(
-            checked = profileNavInfo.isEnabled,
-            onCheckedChange = { onToggleEnabled() }
-        )
+
+        Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
+            Text(
+                text = profileNavInfo.appName,
+                fontWeight = FontWeight.Normal
+            )
+            if (isLocked) {
+                Text(
+                    text = "Trial Expired (Locked)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
+        if (isLocked) {
+            // Show Lock icon instead of checkbox
+            Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = "Locked",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Checkbox(
+                checked = profileNavInfo.isEnabled,
+                onCheckedChange = { onToggleEnabled() }
+            )
+        }
     }
 }
 

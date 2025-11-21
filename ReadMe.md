@@ -2,7 +2,7 @@
 
 # **Turn any Bluetooth remote or physical button into a touch automation tool.**
 
-TikTap Remote is an Android application that allows users to map hardware inputs (such as Bluetooth camera shutters, volume keys, or headset buttons) to simulate touch gestures on the screen. It is designed for hands-free interaction with apps like TikTok, Instagram Reels, Tinder, or ebook readers.
+TikTap Remote is an Android application that allows users to map hardware inputs (such as Bluetooth camera shutters, volume keys, Gimbals or headset buttons) to simulate touch gestures on the screen. It is designed for hands-free interaction with apps like TikTok, Instagram Reels, Tinder, or ebook readers or any other app that you could like to semi automate simulating gestures.
 
 ## **Core Features**
 
@@ -18,24 +18,24 @@ The app can perform a wide variety of Accessibility gestures:
 * **Single Tap:** Simulates a finger tap at a specific X,Y coordinate.  
 * **Double Tap:** Simulates a quick double-tap.  
 * **Swipes:** Perform swipes (Up, Down, Left, Right) for scrolling feeds.  
-* **Gesture Recording:** Users can draw complex paths on the screen, save them, and replay them via the remote.
+* **Gesture Recording:** Users can draw complex paths on the screen, save them, and replay them via the remote. (Upto 5 seconds)
 
 ### **3\. App-Specific Profiles**
 
 * **Global Profile:** Default actions that apply everywhere. (app profiles take priority)  
-* **App Profiles:** Define different behaviors for specific apps.  
+* **App Profiles:** Define different behaviors for specific apps.
   * *Example:* "Volume Up" can mean "Swipe Up" in TikTok, or "Doube Tap" in another app.  
 * **Smart Detection:** The app automatically switches profiles when you open a target app (supports fullscreen/immersive games).
 
 ### **4\. Visual Targeting System**
 
-* **Drag-and-Drop Targeting:** Uses a system overlay (crosshair) to precisely set where the simulated tap should occur.  
+* **Drag-and-Drop Targeting:** Uses a system overlay (crosshair) to precisely set where the simulated tap/swipe should occur .  
 * **Live Recording Overlay:** Draws over other apps to record custom gesture paths in real-time.
 
 ### **5\. Advanced Automation**
 
-* **Double Press Triggers:** Map a different action to double-clicking the hardware button.  
-* **Repeat Mode:** Holding your selected input toggles repeat mode to perform the action every few seconds (configurable interval, 3-30 seconds).
+* **Double Press Triggers:** Map a different action to double-clicking the hardware button, have two fuctions on the one button.  
+* **Repeat Mode:** Holding your selected input for 1 second toggles repeat mode to perform the action every few seconds (configurable interval, 3-30 seconds).
 
 ## **Technical Architecture**
 
