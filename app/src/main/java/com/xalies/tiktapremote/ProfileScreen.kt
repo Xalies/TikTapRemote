@@ -1,10 +1,7 @@
 package com.xalies.tiktapremote
 
 import android.Manifest
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.KeyEvent
@@ -23,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff // Updated Import
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp  // Updated Import
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,6 +33,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -54,14 +54,13 @@ fun ProfileScreen(
     appInfo: AppInfo,
     initialKeyCode: String?,
     initialBlockInput: Boolean?,
-    initialActions: Map<TriggerType, Action>?, // Used for initial state if DB empty
+    initialActions: Map<TriggerType, Action>?,
     onBackClick: () -> Unit,
     initialSelectedTrigger: TriggerType = TriggerType.SINGLE_PRESS
 ) {
     val context = LocalContext.current
     val repository = remember { ProfileRepository(context) }
 
-    // *** DB OBSERVATION ***
     val profiles by ProfileManager.profiles.collectAsState()
     val liveProfile = profiles.find { it.packageName == appInfo.packageName }
 
@@ -83,11 +82,9 @@ fun ProfileScreen(
         mutableStateOf(if (canConfigKey) (initialKeyCode?.toIntOrNull() ?: defaultKey) else defaultKey)
     }
 
-    // Initialize from DB or args
     var assignedActions by remember { mutableStateOf(liveProfile?.actions ?: initialActions ?: emptyMap()) }
     var selectedTriggerForAssignment by remember { mutableStateOf(initialSelectedTrigger) }
 
-    // Sync with DB updates
     LaunchedEffect(liveProfile) {
         if (liveProfile != null) {
             assignedActions = liveProfile.actions
@@ -97,15 +94,9 @@ fun ProfileScreen(
         }
     }
 
-    // Sync Tab selection from deep link return
     LaunchedEffect(initialSelectedTrigger) {
         selectedTriggerForAssignment = initialSelectedTrigger
     }
-
-    // Derive display values
-    val activeAction = assignedActions[selectedTriggerForAssignment]
-    val tapTargetX = activeAction?.tapX
-    val tapTargetY = activeAction?.tapY
 
     LaunchedEffect(canDoublePress) {
         if (!canDoublePress && selectedTriggerForAssignment == TriggerType.DOUBLE_PRESS) {
@@ -127,21 +118,14 @@ fun ProfileScreen(
         }
     }
 
-    // *** STRICT SAVE CHECK ***
-    // Only allow manual saving if:
-    // 1. At least one action exists.
-    // 2. All assigned actions have valid data (either RECORDED or have non-zero coordinates).
     val isSavable = assignedActions.isNotEmpty() && assignedActions.values.all { action ->
         if (action.type == ActionType.RECORDED) {
-            // Recorded gestures must have data
             !action.recordedGesture.isNullOrEmpty()
         } else {
-            // Tap/Swipe must have coordinates
             action.tapX != 0 && action.tapY != 0
         }
     }
 
-    // Helper to save BEFORE launching overlay (Internal use only)
     fun saveProfileLocally() {
         val fallbackX = assignedActions[TriggerType.SINGLE_PRESS]?.tapX ?: 0
         val fallbackY = assignedActions[TriggerType.SINGLE_PRESS]?.tapY ?: 0
@@ -160,19 +144,14 @@ fun ProfileScreen(
     }
 
     fun launchAppForAction(isRecording: Boolean) {
-        // *** SAVE FIRST ***
         saveProfileLocally()
-
         val action = if (isRecording) ACTION_START_GESTURE_RECORDING else ACTION_START_TARGETING
-
         val intent = Intent(action).apply {
             putExtra("packageName", appInfo.packageName)
             putExtra("appName", appInfo.name)
             putExtra("selectedTrigger", selectedTriggerForAssignment.name)
             putExtra("keyCode", keyCode)
             putExtra("blockInput", blockRemoteInput)
-
-            // Pass current coordinates just for the overlay UI to start there
             val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
             val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
             putExtra("tapX", currentX)
@@ -211,25 +190,24 @@ fun ProfileScreen(
     if (showTrialDialog) {
         AlertDialog(
             onDismissRequest = { showTrialDialog = false },
-            title = { Text("Feature Locked") },
-            text = { Text("This feature requires Pro. Please go to the App List (+) to activate a trial or upgrade.") },
-            confirmButton = { TextButton(onClick = { showTrialDialog = false }) { Text("OK") } }
+            title = { Text(stringResource(R.string.dialog_feature_locked_title)) },
+            text = { Text(stringResource(R.string.dialog_feature_locked_desc)) },
+            confirmButton = { TextButton(onClick = { showTrialDialog = false }) { Text(stringResource(R.string.btn_ok)) } }
         )
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Profile: ${appInfo.name}", fontSize = 20.sp) },
+                title = { Text(stringResource(R.string.profile_title, appInfo.name), fontSize = 20.sp) },
                 navigationIcon = { IconButton(onClick = onBackClick) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                 actions = {
-                    // User-facing Save button: Strictly controlled by `isSavable`
                     TextButton(onClick = {
                         if (isSavable) {
                             saveProfileLocally()
                             onBackClick()
                         }
-                    }, enabled = isSavable) { Text("Save", fontWeight = FontWeight.Bold) }
+                    }, enabled = isSavable) { Text(stringResource(R.string.btn_save), fontWeight = FontWeight.Bold) }
                 }
             )
         }
@@ -251,22 +229,21 @@ fun ProfileScreen(
                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Timer, null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text("Trial Active: %02d:%02d:%02d".format(hours, minutes, seconds), color = MaterialTheme.colorScheme.onTertiaryContainer, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.trial_active_fmt, hours, minutes, seconds), color = MaterialTheme.colorScheme.onTertiaryContainer, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
             Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
                 SettingItem(
-                    title = "Input Trigger",
-                    subtitle = if (!canConfigKey) "Volume Up (Locked)" else (keyCode.let { mapKeyCodeToString(it) }),
+                    title = stringResource(R.string.setting_input_trigger),
+                    subtitle = if (!canConfigKey) stringResource(R.string.input_locked) else (keyCode.let { mapKeyCodeToString(it) }),
                     icon = Icons.Rounded.Settings,
                     isEnabled = canConfigKey,
                     onClick = { if(canConfigKey) showKeycodeDialog = true else showTrialDialog = true }
                 )
             }
 
-            // Trigger Tabs
             Row(modifier = Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh), verticalAlignment = Alignment.CenterVertically) {
                 TriggerType.values().forEach { trigger ->
                     val isSelected = selectedTriggerForAssignment == trigger
@@ -274,7 +251,6 @@ fun ProfileScreen(
 
                     val label = trigger.name.toFriendlyName()
 
-                    // *** ANIMATED CLICKABLE BOX ***
                     BouncingBox(
                         modifier = Modifier.weight(1f).fillMaxHeight().padding(3.dp),
                         isSelected = isSelected,
@@ -286,8 +262,7 @@ fun ProfileScreen(
                 }
             }
 
-            // --- SECTION: TAPS & GESTURES ---
-            Text("Taps & Gestures", style = MaterialTheme.typography.titleMedium, modifier = Modifier.align(Alignment.Start).padding(top=8.dp))
+            Text(stringResource(R.string.section_taps), style = MaterialTheme.typography.titleMedium, modifier = Modifier.align(Alignment.Start).padding(top=8.dp))
 
             val tapActions = ActionType.values().filter { it.name.contains("TAP") || it == ActionType.RECORDED }
 
@@ -296,7 +271,7 @@ fun ProfileScreen(
                     val isAssigned = assignedActions[selectedTriggerForAssignment]?.type == action
                     val isAllowed = repository.isActionAllowed(action)
 
-                    val label = if (action == ActionType.RECORDED) "Record" else action.name.toFriendlyName()
+                    val label = if (action == ActionType.RECORDED) stringResource(R.string.label_record) else action.name.toFriendlyName()
 
                     ActionIconItem(
                         label = label,
@@ -306,10 +281,8 @@ fun ProfileScreen(
                         onClick = {
                             if (isAllowed) {
                                 if (isAssigned) {
-                                    // TOGGLE OFF
                                     assignedActions = assignedActions.toMutableMap().apply { remove(selectedTriggerForAssignment) }
                                 } else {
-                                    // TOGGLE ON
                                     val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
                                     val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
 
@@ -328,7 +301,6 @@ fun ProfileScreen(
                 }
             }
 
-            // --- SECTION: SWIPES ---
             val swipeActions = ActionType.values().filter { it.name.contains("SWIPE") }
 
             Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
@@ -344,10 +316,8 @@ fun ProfileScreen(
                         onClick = {
                             if (isAllowed) {
                                 if (isAssigned) {
-                                    // TOGGLE OFF
                                     assignedActions = assignedActions.toMutableMap().apply { remove(selectedTriggerForAssignment) }
                                 } else {
-                                    // TOGGLE ON
                                     val currentX = assignedActions[selectedTriggerForAssignment]?.tapX ?: 0
                                     val currentY = assignedActions[selectedTriggerForAssignment]?.tapY ?: 0
                                     val newAction = Action(type = action, tapX = currentX, tapY = currentY)
@@ -361,9 +331,8 @@ fun ProfileScreen(
                 }
             }
 
-            Text("Swipes", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text(stringResource(R.string.section_swipes), style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
 
-            // Selected Action Detail View
             Spacer(modifier = Modifier.height(8.dp))
             val currentAction = assignedActions[selectedTriggerForAssignment]
             val type = currentAction?.type
@@ -371,11 +340,11 @@ fun ProfileScreen(
             val isActionSelected = type != null
             val isRecordedType = type == ActionType.RECORDED
 
-            val title = if(isRecordedType) "Record Gesture" else "Set Point"
-            val subtitle = if (!isActionSelected) "Select an action above"
-            else if(isRecordedType) "Press to start"
-            else if (currentAction?.tapX != 0 && currentAction?.tapY != 0) "X: ${currentAction?.tapX}, Y: ${currentAction?.tapY}"
-            else "Not Set"
+            val title = if(isRecordedType) stringResource(R.string.action_record_gesture) else stringResource(R.string.action_set_point)
+            val subtitle = if (!isActionSelected) stringResource(R.string.sub_select_action)
+            else if(isRecordedType) stringResource(R.string.sub_press_start)
+            else if (currentAction?.tapX != 0 && currentAction?.tapY != 0) stringResource(R.string.sub_coords, currentAction?.tapX ?: 0, currentAction?.tapY ?: 0)
+            else stringResource(R.string.sub_not_set)
 
             Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
                 SettingItem(
@@ -393,13 +362,12 @@ fun ProfileScreen(
                                 }
                             } else launchAppForAction(isRecording)
                         } else {
-                            Toast.makeText(context, "Please select an action first", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.toast_select_action), Toast.LENGTH_SHORT).show()
                         }
                     }
                 )
             }
 
-            // Options & Repeat
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
@@ -409,8 +377,9 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // FIX: Use AutoMirrored Icons here
                         Icon(
-                            imageVector = if (blockRemoteInput) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                            imageVector = if (blockRemoteInput) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
                             contentDescription = null,
                             tint = if (blockRemoteInput) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(24.dp)
@@ -419,12 +388,12 @@ fun ProfileScreen(
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Exclusive Mode",
+                                text = stringResource(R.string.setting_exclusive),
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "Prevents volume changes",
+                                text = stringResource(R.string.setting_exclusive_desc),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -455,7 +424,7 @@ fun ProfileScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Tip: Tap 'Disable' in the notification to temporarily restore system interactions.",
+                                    text = stringResource(R.string.exclusive_tip),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
@@ -467,8 +436,18 @@ fun ProfileScreen(
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
                         val keyName = mapKeyCodeToString(keyCode)
-                        Text("Repeat Interval (Hold $keyName 1s to Toggle)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top=8.dp))
-                        Slider(value = repeatInterval, onValueChange = { repeatInterval = it }, valueRange = 3000f..30000f, steps = 26)
+                        Text(stringResource(R.string.label_repeat_interval, keyName), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top=8.dp))
+
+                        val activeAction = assignedActions[selectedTriggerForAssignment]
+                        val isRecordedAction = activeAction?.type == ActionType.RECORDED
+                        val minInterval = if (isRecordedAction) 6000f else 1000f
+
+                        Slider(
+                            value = repeatInterval.coerceAtLeast(minInterval),
+                            onValueChange = { repeatInterval = it },
+                            valueRange = minInterval..30000f,
+                            steps = 26
+                        )
                         Text("${(repeatInterval / 1000).toInt()}s", style = MaterialTheme.typography.labelSmall, modifier = Modifier.align(Alignment.End))
                     }
                 }
@@ -506,7 +485,6 @@ fun SettingItem(title: String, subtitle: String, icon: ImageVector, isEnabled: B
     }
 }
 
-// Helper composable for the bouncy tab effect
 @Composable
 fun BouncingBox(
     modifier: Modifier = Modifier,
@@ -525,7 +503,7 @@ fun BouncingBox(
             .scale(scale)
             .clip(RoundedCornerShape(19.dp))
             .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick), // Custom indication logic if needed, null for now to rely on scale
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
         content = content
     )
@@ -575,7 +553,12 @@ fun ActionIconItem(
 
 @Composable
 fun KeycodeFinderDialog(onDismiss: () -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Press Button") }, text = { Text("Press a remote button.") }, confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.dialog_keycode_title)) },
+        text = { Text(stringResource(R.string.dialog_keycode_desc)) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }
+    )
 }
 
 fun String.toFriendlyName(): String {
@@ -602,8 +585,7 @@ fun AdMobBanner() {
         factory = { context ->
             AdView(context).apply {
                 setAdSize(AdSize.BANNER)
-                // Updated Banner ID
-                adUnitId = "ca-app-pub-9083635854272688/7237298124"
+                adUnitId = "ca-app-pub-3940256099942544/6300978111"
                 loadAd(AdRequest.Builder().build())
             }
         }

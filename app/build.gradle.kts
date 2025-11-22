@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.ksp) // Add KSP plugin
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -11,21 +11,31 @@ android {
 
     defaultConfig {
         applicationId = "com.xalies.tiktapremote"
-        minSdk = 31 // Lowered to support Android 12
+        minSdk = 31
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+
+        // AUTOMATIC VERSIONING
+        // Uses the current timestamp (in seconds) to ensure a unique, increasing number for every build.
+        val timeCode = (System.currentTimeMillis() / 1000).toInt()
+        versionCode = timeCode
+        versionName = "1.1.$timeCode" // Adds the code to the name for easy tracking
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // MINIFICATION ENABLED
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            // Keep minification off for debug builds to speed up compilation
+            isMinifyEnabled = false
         }
     }
     compileOptions {
@@ -37,6 +47,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

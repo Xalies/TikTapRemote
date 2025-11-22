@@ -2,6 +2,7 @@ package com.xalies.tiktapremote
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
@@ -34,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -69,7 +72,6 @@ fun MainScreen(
     val profilesFlow = ProfileManager.profiles.collectAsState()
     val profiles = profilesFlow.value
 
-    // *** ADDED: Track Tier for UI Logic ***
     var currentTier by remember { mutableStateOf(repository.getCurrentTier()) }
 
     var profileToDelete by remember { mutableStateOf<Profile?>(null) }
@@ -98,7 +100,8 @@ fun MainScreen(
     val profileNavInfos = remember(profiles) {
         profiles.map { profile ->
             val appName = if (profile.packageName == GLOBAL_PROFILE_PACKAGE_NAME) {
-                "Global Profile"
+                // FIX: Use context.getString() instead of stringResource() inside remember block
+                context.getString(R.string.global_profile_name)
             } else {
                 try {
                     val appInfo = context.packageManager.getApplicationInfo(profile.packageName, 0)
@@ -126,9 +129,7 @@ fun MainScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isServiceGloballyEnabled = repository.isServiceEnabled()
-                // Refresh tier to ensure locked state is accurate
                 currentTier = repository.getCurrentTier()
-
                 hasOverlayPermission = Settings.canDrawOverlays(context)
                 isAccessibilityServiceEnabled = isAccessibilityServiceEnabled(context)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -170,8 +171,27 @@ fun MainScreen(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text("TikTap Remote") },
+                title = { Text(stringResource(R.string.app_name)) },
                 actions = {
+                    IconButton(onClick = {
+                        val activity = context as? Activity
+                        if (activity != null) {
+                            AdManager.showRewardedAd(
+                                activity = activity,
+                                onRewardEarned = {
+                                    repository.addAdRewardTime()
+                                    currentTier = repository.getCurrentTier()
+                                    Toast.makeText(context, context.getString(R.string.toast_trial_extended), Toast.LENGTH_LONG).show()
+                                },
+                                onDismissed = {}
+                            )
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.toast_ad_failed), Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Icon(Icons.Default.AccessTime, "Extend Trial")
+                    }
+
                     IconButton(onClick = onUpgradeClick) {
                         Icon(Icons.Default.ShoppingCart, "Upgrade")
                     }
@@ -181,11 +201,11 @@ fun MainScreen(
         floatingActionButton = {
             FloatingActionButton(onClick = {
                 if (!isAccessibilityServiceEnabled) {
-                    Toast.makeText(context, "Please Grant Accessibility", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.toast_grant_access), Toast.LENGTH_SHORT).show()
                     return@FloatingActionButton
                 }
                 if (!hasOverlayPermission) {
-                    Toast.makeText(context, "Please enable 'Draw Over Other Apps' first", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.toast_grant_overlay), Toast.LENGTH_SHORT).show()
                     val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName))
                     context.startActivity(intent)
                     return@FloatingActionButton
@@ -195,7 +215,7 @@ fun MainScreen(
                 val currentAppCount = profiles.count { it.packageName != GLOBAL_PROFILE_PACKAGE_NAME }
 
                 if (tier == AppTier.ESSENTIALS && currentAppCount >= 2) {
-                    Toast.makeText(context, "Essential Tier limited to 2 profiles, delete one first or upgrade to a pro tier", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, context.getString(R.string.toast_limit_essential), Toast.LENGTH_LONG).show()
                 } else {
                     onAddProfileClick()
                 }
@@ -205,14 +225,13 @@ fun MainScreen(
         }
     ) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding).padding(16.dp)) {
-            // Master Toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    "Enable TikTap Service",
+                    stringResource(R.string.master_switch_label),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f)
                 )
@@ -222,28 +241,30 @@ fun MainScreen(
                         isServiceGloballyEnabled = isEnabled
                         repository.setServiceEnabled(isEnabled)
 
-                        val currentTime = System.currentTimeMillis()
-                        if (currentTime - lastClickTime < 500) {
-                            debugClickCount++
-                        } else {
-                            debugClickCount = 1
-                        }
-                        lastClickTime = currentTime
-
-                        if (debugClickCount >= 10) {
-                            if (repository.isBackdoorActive()) {
-                                repository.setBackdoorUsed(true)
-                                val newTier = repository.cycleTier()
-                                currentTier = newTier // Update local state immediately
-                                Toast.makeText(context, "🕵️ Debug: Switched to ${newTier.name}", Toast.LENGTH_LONG).show()
+                        // FIX: BuildConfig is now recognized after build.gradle update
+                        if (BuildConfig.DEBUG) {
+                            val currentTime = System.currentTimeMillis()
+                            if (currentTime - lastClickTime < 500) {
+                                debugClickCount++
+                            } else {
+                                debugClickCount = 1
                             }
-                            debugClickCount = 0
+                            lastClickTime = currentTime
+
+                            if (debugClickCount >= 10) {
+                                if (repository.isBackdoorActive()) {
+                                    repository.setBackdoorUsed(true)
+                                    val newTier = repository.cycleTier()
+                                    currentTier = newTier
+                                    Toast.makeText(context, context.getString(R.string.toast_debug_switched, newTier.name), Toast.LENGTH_LONG).show()
+                                }
+                                debugClickCount = 0
+                            }
                         }
                     }
                 )
             }
 
-            // Haptic Toggle
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top=8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -251,7 +272,7 @@ fun MainScreen(
             ) {
                 Icon(Icons.Default.Vibration, null, tint = MaterialTheme.colorScheme.secondary)
                 Text(
-                    "Haptic Feedback",
+                    stringResource(R.string.haptic_label),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.weight(1f)
                 )
@@ -268,11 +289,11 @@ fun MainScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (!hasOverlayPermission || !isAccessibilityServiceEnabled || !hasNotificationPermission) {
-                Text("Required Permissions", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.required_permissions_title), style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(8.dp))
                 if (!hasOverlayPermission) {
                     PermissionCheck(
-                        permissionName = "Draw Over Other Apps",
+                        permissionName = stringResource(R.string.perm_overlay),
                         onClick = {
                             val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName))
                             context.startActivity(intent)
@@ -281,7 +302,7 @@ fun MainScreen(
                 }
                 if (!isAccessibilityServiceEnabled) {
                     PermissionCheck(
-                        permissionName = "Accessibility Service",
+                        permissionName = stringResource(R.string.perm_accessibility),
                         onClick = {
                             showAccessibilityDisclosure = true
                         }
@@ -289,7 +310,7 @@ fun MainScreen(
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
                     PermissionCheck(
-                        permissionName = "Send Notifications",
+                        permissionName = stringResource(R.string.perm_notification),
                         onClick = { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
                     )
                 }
@@ -310,12 +331,12 @@ fun MainScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "No profiles saved yet",
+                        text = stringResource(R.string.no_profiles_title),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "Tap the '+' button to create one",
+                        text = stringResource(R.string.no_profiles_desc),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -326,7 +347,7 @@ fun MainScreen(
                         val originalProfile = profiles.find { it.packageName == profileInfo.packageName }
                         ProfileListItem(
                             profileNavInfo = profileInfo,
-                            currentTier = currentTier, // Pass tier to item
+                            currentTier = currentTier,
                             onClick = { onProfileClick(profileInfo) },
                             onLongClick = { profileToDelete = originalProfile },
                             onDoubleClick = {
@@ -335,27 +356,24 @@ fun MainScreen(
                                     if (launchIntent != null) {
                                         context.startActivity(launchIntent)
                                     } else {
-                                        Toast.makeText(context, "Cannot launch this app directly", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.toast_cannot_launch), Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
-                                    Toast.makeText(context, "Cannot launch Global Profile", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.toast_cannot_launch_global), Toast.LENGTH_SHORT).show()
                                 }
                             },
                             onToggleEnabled = {
                                 if (originalProfile != null) {
                                     val newStatus = !originalProfile.isEnabled
-
-                                    // Check limits ONLY if turning ON and it is NOT the Global Profile
                                     if (newStatus && originalProfile.packageName != GLOBAL_PROFILE_PACKAGE_NAME) {
                                         val limit = repository.getMaxAppProfiles()
                                         val currentEnabled = profiles.count { it.packageName != GLOBAL_PROFILE_PACKAGE_NAME && it.isEnabled }
 
                                         if (currentEnabled >= limit) {
-                                            Toast.makeText(context, "Limit reached ($limit enabled profiles). Upgrade to enable more.", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, context.getString(R.string.toast_limit_reached, limit), Toast.LENGTH_LONG).show()
                                             return@ProfileListItem
                                         }
                                     }
-
                                     val updatedProfile = originalProfile.copy(isEnabled = newStatus)
                                     ProfileManager.updateProfile(updatedProfile)
                                 }
@@ -372,26 +390,20 @@ fun MainScreen(
 fun AccessibilityDisclosureDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Accessibility Service Usage") },
+        title = { Text(stringResource(R.string.dialog_access_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("To translate your remote's button presses into on-screen actions, TikTap Remote requires Accessibility Service permissions. Here’s exactly why we need them:")
-                Text("1. Perform Gestures:", fontWeight = FontWeight.Bold)
-                Text("This is the app's core function. It allows us to programmatically perform the Taps, Swipes, and Double Taps you configure.")
-                Text("2. Retrieve Window Content:", fontWeight = FontWeight.Bold)
-                Text("We only use this to identify the package name of the app currently in the foreground (e.g., TikTok). This is essential to know which of your saved profiles to activate.")
-                Text("3. Observe Your Actions:", fontWeight = FontWeight.Bold)
-                Text("We use this specifically to capture hardware key presses from your Bluetooth remote. We use a modern flag that explicitly filters out any on-screen keyboard events, ensuring we cannot see anything you type.")
+                Text(stringResource(R.string.dialog_access_desc))
             }
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text("Continue to Settings")
+                Text(stringResource(R.string.btn_continue_settings))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(stringResource(R.string.btn_cancel))
             }
         }
     )
@@ -406,7 +418,7 @@ fun PermissionCheck(permissionName: String, onClick: () -> Unit) {
     ) {
         Text(permissionName)
         Button(onClick = onClick) {
-            Text("Grant")
+            Text(stringResource(R.string.btn_grant))
         }
     }
 }
@@ -415,10 +427,10 @@ fun PermissionCheck(permissionName: String, onClick: () -> Unit) {
 fun DeleteConfirmationDialog(profileName: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Delete Profile") },
-        text = { Text("Are you sure you want to delete the profile for \"$profileName\"?") },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Delete") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        title = { Text(stringResource(R.string.dialog_delete_title)) },
+        text = { Text(stringResource(R.string.dialog_delete_msg, profileName)) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.btn_delete)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }
     )
 }
 
@@ -426,7 +438,7 @@ fun DeleteConfirmationDialog(profileName: String, onConfirm: () -> Unit, onDismi
 @Composable
 fun ProfileListItem(
     profileNavInfo: ProfileNavInfo,
-    currentTier: AppTier, // Added
+    currentTier: AppTier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onDoubleClick: () -> Unit,
@@ -440,9 +452,6 @@ fun ProfileListItem(
         null
     }
 
-    // Determine if this profile is effectively "locked" due to tier limits
-    // Logic: It's an App Profile (not Global), it's disabled, and user is on FREE tier.
-    // (Normally, free tier allows 0 app profiles, so any disabled app profile is effectively locked).
     val isLocked = !profileNavInfo.isEnabled &&
             profileNavInfo.packageName != GLOBAL_PROFILE_PACKAGE_NAME &&
             currentTier == AppTier.FREE
@@ -456,7 +465,7 @@ fun ProfileListItem(
                 onDoubleClick = onDoubleClick
             )
             .padding(vertical = 8.dp)
-            .alpha(if (isLocked) 0.5f else 1f), // Grey out if locked
+            .alpha(if (isLocked) 0.5f else 1f),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (profileNavInfo.packageName == GLOBAL_PROFILE_PACKAGE_NAME) {
@@ -480,7 +489,7 @@ fun ProfileListItem(
             )
             if (isLocked) {
                 Text(
-                    text = "Trial Expired (Locked)",
+                    text = stringResource(R.string.profile_trial_expired),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -488,7 +497,6 @@ fun ProfileListItem(
         }
 
         if (isLocked) {
-            // Show Lock icon instead of checkbox
             Icon(
                 imageVector = Icons.Default.Lock,
                 contentDescription = "Locked",
@@ -507,12 +515,4 @@ private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val accessibilityManager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
     val enabledServices = accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
     return enabledServices.any { it.id.contains(context.packageName) }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MainScreenPreview() {
-    TikTapRemoteTheme {
-        MainScreen(onAddProfileClick = {}, onUpgradeClick = {}, onProfileClick = {})
-    }
 }

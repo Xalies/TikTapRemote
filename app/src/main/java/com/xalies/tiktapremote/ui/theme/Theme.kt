@@ -1,7 +1,6 @@
 package com.xalies.tiktapremote.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -30,11 +29,13 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun TikTapRemoteTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    // Dynamic color is available on Android 12+
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        // Removed redundant SDK check because minSdk is 31
+        dynamicColor -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
@@ -45,6 +46,7 @@ fun TikTapRemoteTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
+            @Suppress("DEPRECATION") // Keep using solid color for now to maintain design
             window.statusBarColor = colorScheme.primary.toArgb()
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }

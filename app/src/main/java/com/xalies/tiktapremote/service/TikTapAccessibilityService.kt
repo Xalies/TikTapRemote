@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.VibratorManager // Added
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
@@ -35,8 +36,6 @@ class TikTapAccessibilityService : AccessibilityService() {
     private lateinit var repository: ProfileRepository
     private lateinit var audioManager: AudioManager
     private lateinit var vibrator: Vibrator
-
-    // Overlay Manager
     private lateinit var overlayManager: OverlayManager
 
     private var profiles: Set<Profile> = setOf()
@@ -46,6 +45,8 @@ class TikTapAccessibilityService : AccessibilityService() {
     private var lastKeyPressed: Int? = null
     private var isDoublePressPending = false
     private val DOUBLE_PRESS_TIMEOUT = 400L
+
+    private var lastTriggerType: TriggerType = TriggerType.SINGLE_PRESS
 
     private val longPressHandler = Handler(Looper.getMainLooper())
     private var isLongPressTriggered = false
@@ -60,7 +61,7 @@ class TikTapAccessibilityService : AccessibilityService() {
             if (!isRepeatActive) return
             val profile = getCurrentProfile(lastKeyPressed ?: return)
             if (profile != null && profile.isEnabled) {
-                val action = profile.actions[TriggerType.SINGLE_PRESS]
+                val action = profile.actions[lastTriggerType]
                 if (action != null) performActionForProfile(profile, action)
             }
             val randomDelay = Random.nextLong(-1000, 1000)
@@ -76,68 +77,41 @@ class TikTapAccessibilityService : AccessibilityService() {
 
             val keyCode = intent.getIntExtra("keyCode", -1)
             val blockInput = intent.getBooleanExtra("blockInput", false)
-            val tapX = intent.getIntExtra("tapX", 0)
-            val tapY = intent.getIntExtra("tapY", 0)
             val singleAction = intent.getStringExtra("singleAction")
             val doubleAction = intent.getStringExtra("doubleAction")
-
-            // *** FIX: Extract all coordinate extras ***
             val singleX = intent.getIntExtra("singleX", 0)
             val singleY = intent.getIntExtra("singleY", 0)
             val doubleX = intent.getIntExtra("doubleX", 0)
             val doubleY = intent.getIntExtra("doubleY", 0)
 
+            val overlayIntent = Intent(context, com.xalies.tiktapremote.OverlayActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra("targetPackageName", packageName)
+                putExtra("targetAppName", appName)
+                putExtra("selectedTrigger", selectedTrigger)
+                putExtra("keyCode", keyCode)
+                putExtra("blockInput", blockInput)
+                putExtra("singleAction", singleAction)
+                putExtra("doubleAction", doubleAction)
+                putExtra("singleX", singleX)
+                putExtra("singleY", singleY)
+                putExtra("doubleX", doubleX)
+                putExtra("doubleY", doubleY)
+            }
+
             when (intent.action) {
                 ACTION_START_TARGETING -> {
                     targetPackageForOverlay = packageName
-                    // Pass raw intent to OverlayManager to handle extras flexibly
-                    val overlayIntent = Intent(context, com.xalies.tiktapremote.OverlayActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        putExtra("mode", "targeting")
-                        putExtra("targetPackageName", packageName)
-                        putExtra("targetAppName", appName)
-                        putExtra("selectedTrigger", selectedTrigger)
-                        putExtra("keyCode", keyCode)
-                        putExtra("blockInput", blockInput)
-
-                        // Pass everything
-                        putExtra("singleAction", singleAction)
-                        putExtra("doubleAction", doubleAction)
-                        putExtra("singleX", singleX)
-                        putExtra("singleY", singleY)
-                        putExtra("doubleX", doubleX)
-                        putExtra("doubleY", doubleY)
-
-                        // Legacy for current crosshair position
-                        putExtra("tapX", tapX)
-                        putExtra("tapY", tapY)
-                    }
+                    overlayIntent.putExtra("mode", "targeting")
                     context.startActivity(overlayIntent)
                 }
                 ACTION_START_GESTURE_RECORDING -> {
                     targetPackageForOverlay = packageName
-                    val overlayIntent = Intent(context, com.xalies.tiktapremote.OverlayActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        putExtra("mode", "recording")
-                        putExtra("targetPackageName", packageName)
-                        putExtra("targetAppName", appName)
-                        putExtra("selectedTrigger", selectedTrigger)
-                        putExtra("keyCode", keyCode)
-                        putExtra("blockInput", blockInput)
-
-                        // Pass everything to preserve state
-                        putExtra("singleAction", singleAction)
-                        putExtra("doubleAction", doubleAction)
-                        putExtra("singleX", singleX)
-                        putExtra("singleY", singleY)
-                        putExtra("doubleX", doubleX)
-                        putExtra("doubleY", doubleY)
-                    }
+                    overlayIntent.putExtra("mode", "recording")
                     context.startActivity(overlayIntent)
                 }
                 ACTION_STOP_TARGETING -> {
                     targetPackageForOverlay = null
-                    // OverlayActivity closes itself via finish()
                 }
             }
         }
@@ -151,8 +125,6 @@ class TikTapAccessibilityService : AccessibilityService() {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.packageName != null) {
             val newPackage = event.packageName
             if (newPackage.startsWith("com.android.systemui")) return
-
-            // Basic check - we'll do a deeper check on key press
             if (currentPackageName != newPackage) {
                 currentPackageName = newPackage
                 if (isRepeatActive) {
@@ -183,7 +155,10 @@ class TikTapAccessibilityService : AccessibilityService() {
         ProfileManager.initialize(this)
         repository = ProfileRepository(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+
+        // FIXED: Use VibratorManager for Android 12+
+        val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        vibrator = vibratorManager.defaultVibrator
 
         overlayManager = OverlayManager(this)
 
@@ -212,21 +187,17 @@ class TikTapAccessibilityService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent?): Boolean {
         if (!repository.isServiceEnabled()) return super.onKeyEvent(event)
-
-        // 1. Aggressively try to find the real active package
         detectActivePackage()
-
         if (event?.action == KeyEvent.ACTION_DOWN) serviceScope.launch { _keyEvents.emit(event.keyCode) }
 
         if (event?.keyCode == KeyEvent.KEYCODE_BACK || event?.keyCode == KeyEvent.KEYCODE_HOME || event?.keyCode == KeyEvent.KEYCODE_APP_SWITCH) return super.onKeyEvent(event)
 
-        // If we are somehow in the TikTap app itself, let keys pass normally
-        if (currentPackageName?.toString() == packageName) return true
+        // FIXED: Allow events to pass through normally when inside the TikTap app
+        if (currentPackageName?.toString() == packageName) return super.onKeyEvent(event)
 
         val keyCode = event!!.keyCode
         val action = event.action
         val profile = getCurrentProfile(keyCode) ?: run {
-            // No profile found for this app (and Global didn't match) -> Pass through
             if (action == KeyEvent.ACTION_DOWN) passThroughKeyEvent(keyCode)
             return true
         }
@@ -250,7 +221,6 @@ class TikTapAccessibilityService : AccessibilityService() {
                 return true
             }
             if (isRepeatActive) {
-                profile.actions[TriggerType.SINGLE_PRESS]?.let { performActionForProfile(profile, it) }
                 repeatHandler.removeCallbacks(repeatRunnable)
                 repeatHandler.postDelayed(repeatRunnable, currentProfileInterval)
                 return true
@@ -258,12 +228,14 @@ class TikTapAccessibilityService : AccessibilityService() {
             if (isDoublePressPending && keyCode == lastKeyPressed) {
                 isDoublePressPending = false
                 doublePressHandler.removeCallbacksAndMessages(null)
+                lastTriggerType = TriggerType.DOUBLE_PRESS
                 profile.actions[TriggerType.DOUBLE_PRESS]?.let { performActionForProfile(profile, it) }
             } else {
                 isDoublePressPending = true
                 lastKeyPressed = keyCode
                 doublePressHandler.postDelayed({
                     if (isDoublePressPending) {
+                        lastTriggerType = TriggerType.SINGLE_PRESS
                         profile.actions[TriggerType.SINGLE_PRESS]?.let { performActionForProfile(profile, it) }
                         isDoublePressPending = false
                     }
@@ -274,31 +246,19 @@ class TikTapAccessibilityService : AccessibilityService() {
         return super.onKeyEvent(event)
     }
 
-    /**
-     * Robustly detects the top package, even in fullscreen games/overlays.
-     * This fixes the issue where "rootInActiveWindow" returns null.
-     */
     private fun detectActivePackage() {
         var detectedPackage: CharSequence? = null
-
-        // Method 1: Standard rootInActiveWindow (Fastest)
         try {
             val root = rootInActiveWindow
             if (root?.packageName != null) {
                 detectedPackage = root.packageName
             }
-        } catch (e: Exception) {
-            // Ignore
-        }
+        } catch (e: Exception) {}
 
-        // Method 2: Window List Iteration (Most Robust)
-        // Requires flagRetrieveInteractiveWindows in xml config
         if (detectedPackage == null || detectedPackage.toString().startsWith("com.android.systemui")) {
             try {
                 val windowList = windows
-                // Iterate from front (0) to back
                 for (window in windowList) {
-                    // We want the top-most window that is active/focused and NOT system UI
                     if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
                         if (window.root?.packageName != null) {
                             val pkg = window.root.packageName
@@ -309,12 +269,9 @@ class TikTapAccessibilityService : AccessibilityService() {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                // Ignore
-            }
+            } catch (e: Exception) {}
         }
 
-        // Update state if we found something new
         if (detectedPackage != null && detectedPackage != currentPackageName) {
             currentPackageName = detectedPackage
             updateNotificationState()
@@ -348,12 +305,8 @@ class TikTapAccessibilityService : AccessibilityService() {
 
     private fun performActionForProfile(profile: Profile, action: Action) {
         if (!repository.isActionAllowed(action.type)) return
+        if (repository.isHapticEnabled()) vibrate()
 
-        if (repository.isHapticEnabled()) {
-            vibrate()
-        }
-
-        // Use Action-specific coordinates if available, fallback to legacy Profile coordinates
         val x = if (action.tapX != 0) action.tapX else profile.tapX
         val y = if (action.tapY != 0) action.tapY else profile.tapY
 
@@ -391,9 +344,7 @@ class TikTapAccessibilityService : AccessibilityService() {
                 val startX = serializablePath.points.first().x
                 val startY = serializablePath.points.first().y
                 path.moveTo(startX, startY)
-
                 if (serializablePath.points.size == 1) {
-                    // Handle single point as a zero-length line (Tap)
                     path.lineTo(startX, startY)
                 } else {
                     for (i in 1 until serializablePath.points.size) {
@@ -401,21 +352,16 @@ class TikTapAccessibilityService : AccessibilityService() {
                         path.lineTo(point.x, point.y)
                     }
                 }
-
                 val strokeDuration = serializablePath.duration.coerceIn(50L, 10000L)
                 val strokeDelay = serializablePath.delay
-
                 try {
                     gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, strokeDelay, strokeDuration))
                     hasValidStroke = true
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                } catch (e: Exception) {}
             }
         }
-
         if (hasValidStroke) {
-            try { dispatchGesture(gestureBuilder.build(), null, null) } catch (e: Exception) { e.printStackTrace() }
+            try { dispatchGesture(gestureBuilder.build(), null, null) } catch (e: Exception) {}
         }
     }
 

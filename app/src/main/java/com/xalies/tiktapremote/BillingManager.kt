@@ -15,7 +15,6 @@ object BillingManager {
     private const val TAG = "BillingManager"
 
     // --- CONFIGURATION ---
-    // UPDATED: Using hyphens (-) instead of underscores (_) to satisfy Google Play Console strict formatting.
     const val SKU_ESSENTIALS = "tier_essentials"
     const val SKU_PRO_SAVER = "tier_pro_saver"
     const val SKU_PRO = "tier_pro"
@@ -36,7 +35,7 @@ object BillingManager {
 
         billingClient = BillingClient.newBuilder(context)
             .setListener(purchasesUpdatedListener)
-            .enablePendingPurchases()
+            // .enablePendingPurchases() is deprecated and enabled by default in newer versions
             .build()
 
         startConnection()
@@ -139,8 +138,6 @@ object BillingManager {
 
                 if (tier != null) {
                     profileRepository.setCurrentTier(tier)
-                    // If they upgraded, clean up old limits immediately if needed,
-                    // or just let the UI reflect the new capabilities.
                     withContext(Dispatchers.Main) {
                         _purchaseStatus.value = "Purchase Successful! You are now on ${tier.name}."
                     }

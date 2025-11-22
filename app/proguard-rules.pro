@@ -1,21 +1,37 @@
 # Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# --- Android & Compose Defaults ---
+-keepattributes *Annotation*
+-keepattributes SourceFile,LineNumberTable
+-dontwarn androidx.compose.**
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# --- Room Database ---
+# Prevent R8 from stripping Room entities and DAOs
+-keep class androidx.room.RoomDatabase
+-keep class * extends androidx.room.RoomDatabase
+-keep class * implements androidx.room.RoomDatabase
+-dontwarn androidx.room.paging.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep your specific Entities and DAOs
+-keep class com.xalies.tiktapremote.Profile { *; }
+-keep class com.xalies.tiktapremote.data.ProfileDao { *; }
+-keep class com.xalies.tiktapremote.data.AppDatabase { *; }
+
+# --- Gson Serialization ---
+# If you use Gson to save gestures/actions, you must keep the model classes
+# so their field names aren't obfuscated (which would break loading JSON).
+-keep class com.xalies.tiktapremote.Action { *; }
+-keep class com.xalies.tiktapremote.SerializablePath { *; }
+-keep class com.xalies.tiktapremote.Point { *; }
+-keep class com.xalies.tiktapremote.TriggerType { *; }
+-keep class com.xalies.tiktapremote.ActionType { *; }
+
+# --- Enumerations ---
+# Specifically needed for .valueOf() calls
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+# --- AdMob ---
+-keep class com.google.android.gms.ads.** { *; }

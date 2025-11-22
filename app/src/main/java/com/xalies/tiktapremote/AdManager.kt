@@ -13,7 +13,8 @@ import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback
 
 object AdManager {
     private const val TAG = "AdManager"
-    private const val REWARD_AD_UNIT_ID = "ca-app-pub-9083635854272688/9736303106"
+    // CHANGED: Google Test ID for Rewarded Ads
+    private const val REWARD_AD_UNIT_ID = "ca-app-pub-3940256099942544/5224354917"
 
     private var rewardedAd: RewardedAd? = null
     private var isAdLoading = false
@@ -55,13 +56,10 @@ object AdManager {
         if (rewardedAd != null) {
             rewardedAd?.fullScreenContentCallback = object : FullScreenContentCallback() {
                 override fun onAdClicked() {
-                    // Called when a click is recorded for an ad.
                     Log.d(TAG, "Ad was clicked.")
                 }
 
                 override fun onAdDismissedFullScreenContent() {
-                    // Called when ad is dismissed.
-                    // Set the ad reference to null so we don't show the ad a second time.
                     Log.d(TAG, "Ad dismissed fullscreen content.")
                     rewardedAd = null
                     loadRewardedAd(activity) // Preload the next one
@@ -69,25 +67,21 @@ object AdManager {
                 }
 
                 override fun onAdFailedToShowFullScreenContent(adError: AdError) {
-                    // Called when ad fails to show.
                     Log.e(TAG, "Ad failed to show fullscreen content.")
                     rewardedAd = null
                     onDismissed()
                 }
 
                 override fun onAdImpression() {
-                    // Called when an impression is recorded for an ad.
                     Log.d(TAG, "Ad recorded an impression.")
                 }
 
                 override fun onAdShowedFullScreenContent() {
-                    // Called when ad is shown.
                     Log.d(TAG, "Ad showed fullscreen content.")
                 }
             }
 
             rewardedAd?.show(activity) { rewardItem ->
-                // Handle the reward.
                 val rewardAmount = rewardItem.amount
                 val rewardType = rewardItem.type
                 Log.d(TAG, "User earned the reward: $rewardAmount $rewardType")
@@ -96,7 +90,6 @@ object AdManager {
         } else {
             Log.d(TAG, "The rewarded ad wasn't ready yet.")
             loadRewardedAd(activity)
-            // Optional: Inform user ad isn't ready
         }
     }
 
